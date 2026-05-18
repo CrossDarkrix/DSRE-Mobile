@@ -27,7 +27,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 
-
+FFLOG_FILE = os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "DSRE", 'fflog.txt')
 APP_NAME = "DSRE Kivy Mobile CDLL v1.5"
 APP_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXTERNAL_STORAGE = os.getenv("EXTERNAL_STORAGE") or os.path.expanduser("~")
@@ -1024,11 +1024,20 @@ class DSREProcessor:
         if any(
             keyword in error_str
             for keyword in (
-                "permission denied",
-                "access denied",
-                "disk full",
-                "no space",
-            )
+                    "permission denied",
+                    "access denied",
+                    "disk full",
+                    "no space",
+                    "libdsre_audio",
+                    "dsre_decode_to_f32",
+                    "dsre_encode_from_f32",
+                    "dsre_last_error",
+                    "dlopen failed",
+                    "avformat_write_header",
+                    "av_interleaved_write_frame",
+                    "av_write_trailer",
+                    "native audio",
+                )
         ):
             return "fatal"
 

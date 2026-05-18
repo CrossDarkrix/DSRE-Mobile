@@ -125,6 +125,47 @@ static int dsre_grow_float_buffer(float** buffer, int* capacity_floats, int requ
     return DSRE_OK;
 }
 
+static int dsre_output_is_name_like(AVFormatContext* out_fmt, const char* token) {
+    if (!out_fmt || !out_fmt->oformat || !out_fmt->oformat->name || !token) {
+        return 0;
+    }
+    return strstr(out_fmt->oformat->name, token) != NULL;
+}
+
+static int dsre_cover_codec_allowed_for_output(AVFormatContext* out_fmt, enum AVCodecID codec_id) {
+    int is_mp4_like = 0;
+    int is_mp3_like = 0;
+    int is_flac_like = 0;
+
+    if (!out_fmt || !out_fmt->oformat) {
+        return 0;
+    }
+
+    is_mp4_like = dsre_output_is_name_like(out_fmt, "mp4") ||
+                  dsre_output_is_name_like(out_fmt, "ipod") ||
+                  dsre_output_is_name_like(out_fmt, "mov") ||
+                  dsre_output_is_name_like(out_fmt, "3gp");
+
+    is_mp3_like = dsre_output_is_name_like(out_fmt, "mp3");
+    is_flac_like = dsre_output_is_name_like(out_fmt, "flac");
+
+    /*
+     * Conservative policy:
+     * - JPEG/MJPEG cover art is the safest first target.
+     * - PNG/WebP may be accepted by some muxers/builds, but can also cause
+     *   avformat_write_header(EINVAL) depending on the output container and
+     *   FFmpeg build.
+     *
+     * If you later want PNG support, extend this condition after confirming
+     * your FFmpeg build and target container accept it.
+     */
+    if (is_mp4_like || is_mp3_like || is_flac_like) {
+        return codec_id == AV_CODEC_ID_MJPEG;
+    }
+
+    return codec_id == AV_CODEC_ID_MJPEG;
+}
+
 static int dsre_copy_metadata_and_cover_from_original(
     AVFormatContext* out_fmt,
     const char* original_path,
@@ -135,8 +176,12 @@ static int dsre_copy_metadata_and_cover_from_original(
     int ret;
     unsigned int i;
 
-    if (out_cover_pkt) *out_cover_pkt = NULL;
-    if (out_cover_stream_index) *out_cover_stream_index = -1;
+    if (out_cover_pkt) {
+        *out_cover_pkt = NULL;
+    }
+    if (out_cover_stream_index) {
+        *out_cover_stream_index = -1;
+    }
 
     if (!out_fmt || !original_path || original_path[0] == '\0') {
         return DSRE_OK;
@@ -144,7 +189,7 @@ static int dsre_copy_metadata_and_cover_from_original(
 
     ret = avformat_open_input(&in_fmt, original_path, NULL, NULL);
     if (ret < 0) {
-        return DSRE_OK; /* best-effort metadata/cover copy */
+        return DSRE_OK;
     }
 
     ret = avformat_find_stream_info(in_fmt, NULL);
@@ -160,15 +205,32 @@ static int dsre_copy_metadata_and_cover_from_original(
     for (i = 0; i < in_fmt->nb_streams; ++i) {
         AVStream* in_stream = in_fmt->streams[i];
         AVStream* out_stream;
-        AVPacket* pkt;
 
         if (!in_stream || !in_stream->codecpar) {
             continue;
         }
+
         if (!(in_stream->disposition & AV_DISPOSITION_ATTACHED_PIC)) {
             continue;
         }
+
         if (in_stream->attached_pic.size <= 0 || !in_stream->attached_pic.data) {
+            continue;
+        }
+
+        if (in_stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) {
+            continue;
+        }
+
+        if (in_stream->codecpar->width <= 0 || in_stream->codecpar->height <= 0) {
+            continue;
+        }
+
+        if (!dsre_cover_codec_allowed_for_output(out_fmt, in_stream->codecpar->codec_id)) {
+            /*
+             * Unsupported cover format.
+             * Skip it instead of making avformat_write_header fail.
+             */
             continue;
         }
 
@@ -184,25 +246,27 @@ static int dsre_copy_metadata_and_cover_from_original(
         }
 
         out_stream->codecpar->codec_tag = 0;
-        out_stream->time_base = in_stream->time_base;
+        out_stream->time_base = (AVRational){1, 90000};
         out_stream->disposition |= AV_DISPOSITION_ATTACHED_PIC;
 
-        pkt = av_packet_alloc();
-        if (!pkt) {
-            break;
-        }
-        ret = av_packet_ref(pkt, &in_stream->attached_pic);
+        /*
+         * Important:
+         * Attached pictures should be stored in AVStream.attached_pic before
+         * avformat_write_header(). Do not write them later as normal packets.
+         */
+        ret = av_packet_ref(&out_stream->attached_pic, &in_stream->attached_pic);
         if (ret < 0) {
-            av_packet_free(&pkt);
+            out_stream->codecpar->codec_type = AVMEDIA_TYPE_UNKNOWN;
             break;
         }
 
-        pkt->stream_index = out_stream->index;
-        pkt->pts = 0;
-        pkt->dts = 0;
-        pkt->duration = 0;
+        out_stream->attached_pic.stream_index = out_stream->index;
+        out_stream->attached_pic.pts = 0;
+        out_stream->attached_pic.dts = 0;
+        out_stream->attached_pic.duration = 0;
+        out_stream->attached_pic.flags |= AV_PKT_FLAG_KEY;
 
-        *out_cover_pkt = pkt;
+        *out_cover_pkt = NULL;
         *out_cover_stream_index = out_stream->index;
         break;
     }
@@ -698,17 +762,11 @@ DSRE_EXPORT int dsre_encode_from_f32(
     }
     header_written = 1;
 
-    if (cover_pkt && cover_stream_index >= 0) {
-        int cover_ret;
-        cover_pkt->stream_index = cover_stream_index;
-        cover_pkt->pts = 0;
-        cover_pkt->dts = 0;
-        cover_pkt->duration = 0;
-        cover_ret = av_interleaved_write_frame(out_fmt, cover_pkt);
-        av_packet_unref(cover_pkt);
-        /* Cover art is best-effort. If muxer rejects it, continue audio output. */
-        (void)cover_ret;
-    }
+    /*
+     * Cover art is already stored in out_stream->attached_pic before header.
+     * Do not write it here as a normal packet.
+     */
+    (void)cover_stream_index;
 
     av_channel_layout_default(&in_ch_layout, channels);
     in_layout_ready = 1;
