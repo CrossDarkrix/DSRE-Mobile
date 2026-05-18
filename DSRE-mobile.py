@@ -1873,8 +1873,8 @@ class DSREKivyRoot(BoxLayout):
         param_card = MaterialCard(orientation="vertical", size_hint_y=None)
         param_card.bind(minimum_height=param_card.setter("height"))
         param_card.add_widget(SectionTitle(text="設定"))
-        self.input_m = self._param(param_card, "Harmonic 1-32", "12")
-        self.input_decay = self._param(param_card, "Strength 0.1-1.0", "0.35")
+        self.input_m = self._param(param_card, "Harmonic 1-32", "15")
+        self.input_decay = self._param(param_card, "Strength 0.1-1.0", "0.47")
         self.input_sr = self._param(param_card, "Sample Rate", "48000")
         param_card.add_widget(SmallLabel(text="Format"))
         self.input_format = Spinner(text="ALAC", values=("ALAC", "FLAC", "MP3"), size_hint_y=None, height=dp(40), background_normal="", background_color=MATERIAL["surface_alt"], color=MATERIAL["text"])
@@ -1882,10 +1882,10 @@ class DSREKivyRoot(BoxLayout):
         if font:
             self.input_format.font_name = font
         param_card.add_widget(self.input_format)
-        self.input_stereo_width = self._param(param_card, "Stereo Width", "1.15")
-        self.input_dynamic = self._param(param_card, "Dynamic", "1.12")
+        self.input_stereo_width = self._param(param_card, "Stereo Width", "0.98")
+        self.input_dynamic = self._param(param_card, "Dynamic", "1.11")
         self.input_chunk_threshold = self._param(param_card, "Chunk MB", "150")
-        self.input_dsp_context = self._param(param_card, "DSP Context sec", "0.00")
+        self.input_dsp_context = self._param(param_card, "DSP Context sec", "0.04")
         param_card.add_widget(SmallLabel(text="Output Directory"))
         row_out = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
         if os.getenv('EXTERNAL_STORAGE'):
@@ -2010,14 +2010,14 @@ class DSREKivyRoot(BoxLayout):
         if fmt not in ("ALAC", "FLAC", "MP3"):
             raise ValueError("Output format must be ALAC, FLAC, or MP3")
         return {
-            "m": int(np.clip(int(self.input_m.text.strip() or "12"), 1, 32)),
-            "decay": float(np.clip(float(self.input_decay.text.strip() or "0.35"), 0.1, 1.0)),
+            "m": int(np.clip(int(self.input_m.text.strip() or "15"), 1, 32)),
+            "decay": float(np.clip(float(self.input_decay.text.strip() or "0.47"), 0.1, 1.0)),
             "target_sr": int(np.clip(int(self.input_sr.text.strip() or "48000"), 44100, 192000)),
             "format": fmt,
-            "stereo_width": float(np.clip(float(self.input_stereo_width.text.strip() or "1.15"), 1.0, 1.8)),
-            "dynamic": float(np.clip(float(self.input_dynamic.text.strip() or "1.12"), 1.0, 1.5)),
+            "stereo_width": float(np.clip(float(self.input_stereo_width.text.strip() or "0.98"), 1.0, 1.8)),
+            "dynamic": float(np.clip(float(self.input_dynamic.text.strip() or "1.11"), 1.0, 1.5)),
             "chunk_threshold_mb": max(1.0, float(self.input_chunk_threshold.text.strip() or "150")),
-            "dsp_context": float(np.clip(float(self.input_dsp_context.text.strip() or "0.00"), 0.0, 0.08)),
+            "dsp_context": float(np.clip(float(self.input_dsp_context.text.strip() or "0.04"), 0.0, 0.08)),
         }
 
     def update_action_buttons(self):
@@ -2209,7 +2209,7 @@ class DSREKivyRoot(BoxLayout):
                 "stereo_width": self.input_stereo_width.text,
                 "dynamic": self.input_dynamic.text,
                 "chunk_threshold_mb": self.input_chunk_threshold.text,
-                "dsp_context": getattr(self, "input_dsp_context", None).text if getattr(self, "input_dsp_context", None) else "0.00",
+                "dsp_context": getattr(self, "input_dsp_context", None).text if getattr(self, "input_dsp_context", None) else "0.04",
                 "output_dir": self.input_output_dir.text,
                 "last_directory": self.input_directory.text,
                 "last_file": self.input_file.text,
@@ -2243,15 +2243,15 @@ class DSREKivyRoot(BoxLayout):
             with open(self.config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
 
-            self.input_m.text = str(config.get("m", "12"))
-            self.input_decay.text = str(config.get("decay", "0.35"))
+            self.input_m.text = str(config.get("m", "15"))
+            self.input_decay.text = str(config.get("decay", "0.47"))
             self.input_sr.text = str(config.get("target_sr", "48000"))
             self.input_format.text = str(config.get("format", "ALAC"))
-            self.input_stereo_width.text = str(config.get("stereo_width", "1.15"))
-            self.input_dynamic.text = str(config.get("dynamic", "1.12"))
+            self.input_stereo_width.text = str(config.get("stereo_width", "0.98"))
+            self.input_dynamic.text = str(config.get("dynamic", "1.11"))
             self.input_chunk_threshold.text = str(config.get("chunk_threshold_mb", "150"))
             if hasattr(self, "input_dsp_context"):
-                self.input_dsp_context.text = str(config.get("dsp_context", "0.00"))
+                self.input_dsp_context.text = str(config.get("dsp_context", "0.04"))
             self.input_output_dir.text = str(
                 config.get(
                     "output_dir",
