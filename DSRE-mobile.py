@@ -1812,7 +1812,7 @@ class DSREKivyRoot(BoxLayout):
         self.orientation = "vertical"
         self.cancel_requested = False
         self.processor_thread = None
-        self.config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_FILE)
+        self.config_path = CONFIG_FILE
         Window.minimum_width = 360
         Window.minimum_height = 560
         Window.clearcolor = MATERIAL["bg"]
@@ -1885,6 +1885,7 @@ class DSREKivyRoot(BoxLayout):
         self.input_stereo_width = self._param(param_card, "Stereo Width", "1.15")
         self.input_dynamic = self._param(param_card, "Dynamic", "1.12")
         self.input_chunk_threshold = self._param(param_card, "Chunk MB", "150")
+        self.input_dsp_context = self._param(param_card, "DSP Context sec", "0.04")
         param_card.add_widget(SmallLabel(text="Output Directory"))
         row_out = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
         if os.getenv('EXTERNAL_STORAGE'):
@@ -2154,7 +2155,7 @@ class DSREKivyRoot(BoxLayout):
         self.update_status("Ready")
 
     def show_alert(self, title: str, message: str):
-        # Small in-app modal alert. Safe to call from UI/main thread handlers.
+        """Small in-app modal alert. Save/load must continue even if popup fails."""
         try:
             popup = ModalView(size_hint=(0.88, None), height=dp(190), auto_dismiss=True)
             root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
@@ -2174,7 +2175,6 @@ class DSREKivyRoot(BoxLayout):
             popup.add_widget(root)
             popup.open()
         except Exception:
-            # Alert must never break config save/load.
             try:
                 self.write_log(f"{title}: {message}")
             except Exception:
@@ -2182,6 +2182,7 @@ class DSREKivyRoot(BoxLayout):
 
     def save_config(self):
         try:
+            os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
             config = {
                 "m": self.input_m.text,
                 "decay": self.input_decay.text,
@@ -2190,26 +2191,40 @@ class DSREKivyRoot(BoxLayout):
                 "stereo_width": self.input_stereo_width.text,
                 "dynamic": self.input_dynamic.text,
                 "chunk_threshold_mb": self.input_chunk_threshold.text,
-            "dsp_context": self.input_dsp_context.text,
+                "dsp_context": getattr(self, "input_dsp_context", None).text if getattr(self, "input_dsp_context", None) else "0.04",
                 "output_dir": self.input_output_dir.text,
                 "last_directory": self.input_directory.text,
                 "last_file": self.input_file.text,
             }
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-            self.write_log(f"[green]設定を保存しました:[/] {CONFIG_FILE}")
+
+            self.write_log(f"[green]設定を保存しました:[/] {self.config_path}")
             self.status_label.text = "設定を保存しました"
-            self.write_log("Config saved")
-            self.show_alert("設定保存", f"設定を書き込みました\n{CONFIG_FILE}")
+            self.show_alert("設定保存", f"設定を書き込みました\n{self.config_path}")
         except Exception as e:
-            self.write_log(f"Failed to save config: {e}")
+            self.write_log(f"[red]設定保存に失敗しました:[/] {e}")
+            try:
+                self.status_label.text = "設定保存に失敗しました"
+            except Exception:
+                pass
+            try:
+                self.show_alert("設定保存エラー", f"設定保存に失敗しました\n{e}")
+            except Exception:
+                pass
 
     def load_config(self, log=False):
         try:
             if not os.path.exists(self.config_path):
+                if log:
+                    self.write_log(f"設定ファイルが見つかりません: {self.config_path}")
+                    self.status_label.text = "設定ファイルが見つかりません"
+                    self.show_alert("設定読み込み", f"設定ファイルが見つかりません\n{self.config_path}")
                 return
+
             with open(self.config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
+
             self.input_m.text = str(config.get("m", "12"))
             self.input_decay.text = str(config.get("decay", "0.35"))
             self.input_sr.text = str(config.get("target_sr", "48000"))
@@ -2217,17 +2232,32 @@ class DSREKivyRoot(BoxLayout):
             self.input_stereo_width.text = str(config.get("stereo_width", "1.15"))
             self.input_dynamic.text = str(config.get("dynamic", "1.12"))
             self.input_chunk_threshold.text = str(config.get("chunk_threshold_mb", "150"))
-            self.input_dsp_context.text = str(config.get("dsp_context", "0.04"))
-            self.input_output_dir.text = str(config.get("output_dir", os.path.join(EXTERNAL_STORAGE, "Documents", "enhanced_output")))
+            if hasattr(self, "input_dsp_context"):
+                self.input_dsp_context.text = str(config.get("dsp_context", "0.04"))
+            self.input_output_dir.text = str(
+                config.get(
+                    "output_dir",
+                    os.path.join(EXTERNAL_STORAGE, "Documents", "enhanced_output"),
+                )
+            )
             self.input_directory.text = str(config.get("last_directory", ""))
             self.input_file.text = str(config.get("last_file", ""))
-            if log:
-                self.write_log("Config loaded")
-            self.write_log(f"[green]設定を読み込みました:[/] {CONFIG_FILE}")
-            self.status_label.text = "設定を読み込みました"
-        except Exception as e:
-            self.write_log(f"Failed to load config: {e}")
 
+            if log:
+                self.write_log(f"[green]設定を読み込みました:[/] {self.config_path}")
+                self.status_label.text = "設定を読み込みました"
+                self.show_alert("設定読み込み", f"設定を読み込みました\n{self.config_path}")
+        except Exception as e:
+            if log:
+                self.write_log(f"[red]設定読み込みに失敗しました:[/] {e}")
+                try:
+                    self.status_label.text = "設定読み込みに失敗しました"
+                except Exception:
+                    pass
+                try:
+                    self.show_alert("設定読み込みエラー", f"設定読み込みに失敗しました\n{e}")
+                except Exception:
+                    pass
 
 class DSREKivyApp(App):
     title = APP_NAME
