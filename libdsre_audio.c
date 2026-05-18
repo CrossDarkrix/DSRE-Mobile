@@ -787,6 +787,14 @@ static enum AVCodecID dsre_codec_id_from_format(const char* format) {
     return AV_CODEC_ID_NONE;
 }
 
+static const char* dsre_muxer_name_from_format(const char* format) {
+    if (!format) return "ipod";
+    if (strcasecmp(format, "ALAC") == 0 || strcasecmp(format, "M4A") == 0) return "ipod";
+    if (strcasecmp(format, "FLAC") == 0) return "flac";
+    if (strcasecmp(format, "MP3") == 0) return "mp3";
+    return NULL;
+}
+
 static const char* dsre_encoder_name_from_format(const char* format) {
     if (!format) return "alac";
     if (strcasecmp(format, "ALAC") == 0 || strcasecmp(format, "M4A") == 0) return "alac";
@@ -866,7 +874,8 @@ DSRE_EXPORT int dsre_encode_from_f32(
 
     enum AVCodecID codec_id = dsre_codec_id_from_format(format);
     const char* encoder_name = dsre_encoder_name_from_format(format);
-    if (codec_id == AV_CODEC_ID_NONE || !encoder_name) {
+    const char* muxer_name = dsre_muxer_name_from_format(format);
+    if (codec_id == AV_CODEC_ID_NONE || !encoder_name || !muxer_name) {
         dsre_set_error("Unsupported output format: %s", format ? format : "(null)");
         return DSRE_ERR_UNSUPPORTED;
     }
@@ -880,7 +889,7 @@ DSRE_EXPORT int dsre_encode_from_f32(
         return DSRE_ERR_CODEC;
     }
 
-    ret = avformat_alloc_output_context2(&out_fmt, NULL, NULL, output_path);
+    ret = avformat_alloc_output_context2(&out_fmt, NULL, muxer_name, output_path);
     if (ret < 0 || !out_fmt) {
         dsre_set_av_error("avformat_alloc_output_context2 failed", ret);
         ret = DSRE_ERR_FFMPEG;
@@ -1595,7 +1604,8 @@ DSRE_EXPORT int dsre_encoder_open(
 
     codec_id = dsre_codec_id_from_format(format);
     encoder_name = dsre_encoder_name_from_format(format);
-    if (codec_id == AV_CODEC_ID_NONE || !encoder_name) {
+    const char* muxer_name = dsre_muxer_name_from_format(format);
+    if (codec_id == AV_CODEC_ID_NONE || !encoder_name || !muxer_name) {
         dsre_set_error("stream encoder unsupported format: %s", format ? format : "(null)");
         return DSRE_ERR_UNSUPPORTED;
     }
@@ -1608,7 +1618,7 @@ DSRE_EXPORT int dsre_encoder_open(
     if (!e->encoder && codec_id == AV_CODEC_ID_MP3) e->encoder = avcodec_find_encoder(codec_id);
     if (!e->encoder) { dsre_set_error("stream encoder not found: %s", encoder_name); ret = DSRE_ERR_CODEC; goto fail; }
 
-    ret = avformat_alloc_output_context2(&e->out_fmt, NULL, NULL, output_path);
+    ret = avformat_alloc_output_context2(&e->out_fmt, NULL, muxer_name, output_path);
     if (ret < 0 || !e->out_fmt) { dsre_set_av_error("stream encoder alloc output context failed", ret); ret = DSRE_ERR_FFMPEG; goto fail; }
     e->stream = avformat_new_stream(e->out_fmt, NULL);
     if (!e->stream) { dsre_set_error("stream encoder avformat_new_stream failed"); ret = DSRE_ERR_ALLOC; goto fail; }

@@ -1099,6 +1099,121 @@ def enhanced_audio_algorithm(
     return sanitize_audio(final, fallback=x)
 
 
+class DSREStreamingDSP:
+    """Stateful streaming DSP for chunked native decode/encode.
+
+    State carried between chunks:
+      - input_tail: previous raw samples used as FFT/band context
+      - dynamic_env: envelope for dynamic enhancement
+
+    The output length always equals the input chunk length.
+    """
+
+    def __init__(
+        self,
+        sr: int,
+        channels: int,
+        params: Dict[str, Any],
+        context_seconds: float = 0.08,
+    ):
+        self.sr = int(sr)
+        self.channels = int(channels)
+        self.params = params
+        self.context_samples = max(0, int(self.sr * float(context_seconds)))
+        self.input_tail = np.empty((self.channels, 0), dtype=np.float32)
+        self.dynamic_env = np.zeros((self.channels,), dtype=np.float32)
+
+    def process(self, chunk: np.ndarray) -> np.ndarray:
+        chunk = ensure_ch_first(sanitize_audio(chunk)).astype(np.float32, copy=False)
+        if chunk.size == 0 or chunk.shape[1] <= 0:
+            return np.empty((self.channels, 0), dtype=np.float32)
+
+        if self.input_tail.size > 0:
+            work = np.ascontiguousarray(
+                np.concatenate((self.input_tail, chunk), axis=1),
+                dtype=np.float32,
+            )
+            prefix = self.input_tail.shape[1]
+        else:
+            work = chunk
+            prefix = 0
+
+        # Keep FFT/band/exciter context, but only use the valid part for output.
+        enhanced_work = multiband_exciter(
+            work,
+            self.sr,
+            harmonic_intensity=float(self.params["m"]) / 16.0,
+            progress_cb=None,
+            abort_cb=None,
+        )
+        enhanced_work = sanitize_audio(enhanced_work, fallback=work)
+        valid_enhanced = enhanced_work[:, prefix:prefix + chunk.shape[1]]
+        if valid_enhanced.shape[1] != chunk.shape[1]:
+            valid_enhanced = valid_enhanced[:, :chunk.shape[1]]
+            if valid_enhanced.shape[1] < chunk.shape[1]:
+                pad = chunk[:, valid_enhanced.shape[1]:]
+                valid_enhanced = np.concatenate((valid_enhanced, pad), axis=1)
+
+        dynamic = self._stateful_dynamic_range(
+            valid_enhanced,
+            ratio=float(np.clip(float(self.params.get("dynamic", 1.12)), 1.0, 1.5)),
+        )
+
+        stereo = (
+            stereo_width_enhancer(dynamic, float(self.params.get("stereo_width", 1.15)))
+            if chunk.shape[0] == 2
+            else dynamic
+        )
+        stereo = sanitize_audio(stereo, fallback=valid_enhanced)
+
+        blend = float(np.clip(float(self.params.get("decay", 0.35)), 0.1, 0.8))
+        final = chunk * (1.0 - blend) + stereo * blend
+        final = sanitize_audio(final, fallback=chunk).astype(np.float32, copy=False)
+
+        # Avoid per-chunk loudness normalization. Only apply safety scaling.
+        peak = audio_peak(final)
+        if peak > 0.98:
+            final = final * (0.98 / peak)
+
+        if self.context_samples > 0:
+            if work.shape[1] > self.context_samples:
+                self.input_tail = np.ascontiguousarray(work[:, -self.context_samples:], dtype=np.float32)
+            else:
+                self.input_tail = np.ascontiguousarray(work, dtype=np.float32)
+        else:
+            self.input_tail = np.empty((self.channels, 0), dtype=np.float32)
+
+        return np.ascontiguousarray(final, dtype=np.float32)
+
+    def flush(self) -> np.ndarray:
+        self.input_tail = np.empty((self.channels, 0), dtype=np.float32)
+        return np.empty((self.channels, 0), dtype=np.float32)
+
+    def _stateful_dynamic_range(self, x: np.ndarray, ratio: float = 1.12) -> np.ndarray:
+        x = ensure_ch_first(sanitize_audio(x)).astype(np.float32, copy=False)
+        if x.size == 0:
+            return x
+
+        if self.dynamic_env.shape[0] != x.shape[0]:
+            self.dynamic_env = np.zeros((x.shape[0],), dtype=np.float32)
+
+        y = np.empty_like(x, dtype=np.float32)
+        attack_ms = 5.0
+        release_ms = 50.0
+        attack = np.exp(-1.0 / max(1.0, self.sr * attack_ms / 1000.0)).astype(np.float32)
+        release = np.exp(-1.0 / max(1.0, self.sr * release_ms / 1000.0)).astype(np.float32)
+        amount = float(np.clip(ratio - 1.0, 0.0, 0.5))
+
+        for n in range(x.shape[1]):
+            sample_abs = np.abs(x[:, n])
+            coeff = np.where(sample_abs > self.dynamic_env, attack, release).astype(np.float32)
+            self.dynamic_env = coeff * self.dynamic_env + (1.0 - coeff) * sample_abs
+            gain = 1.0 + amount * np.clip(self.dynamic_env, 0.0, 1.0)
+            y[:, n] = x[:, n] * gain
+
+        return sanitize_audio(y, fallback=x).astype(np.float32, copy=False)
+
+
 class DSREProcessor:
     def __init__(
         self,
@@ -1287,15 +1402,12 @@ class DSREProcessor:
         target_sr: int,
         fmt: str,
         chunk_seconds: float = 6.0,
-        overlap_seconds: float = 0.08,
+        overlap_seconds: float = 0.04,
     ) -> str:
-        """Decode/process/encode using overlap + valid-region streaming.
+        """Decode/process/encode using stateful DSP carry-over.
 
-        Each processing window contains:
-            left context overlap + valid core + right context overlap
-
-        Only the valid core is written. This avoids crossfading two independently
-        processed boundary regions and instead uses overlap purely as DSP context.
+        This preserves sample count and avoids boundary shortening. DSP state is
+        carried by DSREStreamingDSP: input context tail + dynamic envelope.
         """
         native = get_native_audio()
         if not getattr(native, "streaming_available", False):
@@ -1303,7 +1415,8 @@ class DSREProcessor:
 
         dec_handle = None
         enc_handle = None
-        tmp_out = out_path + ".tmp"
+        out_root, out_ext = os.path.splitext(out_path)
+        tmp_out = f"{out_root}.tmp{out_ext}" if out_ext else out_path + ".tmp"
         final_written = False
 
         if os.path.exists(tmp_out):
@@ -1322,25 +1435,12 @@ class DSREProcessor:
             )
             native.encoder_write(handle, pcm_interleaved)
 
-        def process_window(window_ch_first: np.ndarray) -> np.ndarray:
-            window_ch_first = ensure_ch_first(sanitize_audio(window_ch_first)).astype(np.float32, copy=False)
-            processed_window = enhanced_audio_algorithm(
-                window_ch_first,
-                sr,
-                enhancement_strength=float(self.params["decay"]),
-                harmonic_intensity=float(self.params["m"]) / 16.0,
-                stereo_width=float(self.params["stereo_width"]),
-                dynamic_enhancement=float(self.params["dynamic"]),
-                progress_cb=None,
-                abort_cb=self.abort_cb,
-            )
-            return ensure_ch_first(sanitize_audio(processed_window, fallback=window_ch_first)).astype(np.float32, copy=False)
-
         try:
+            preferred_samples = max(1024, int(target_sr * chunk_seconds))
             dec_handle, sr, channels = native.decoder_open(
                 in_path,
                 target_sr=target_sr,
-                preferred_chunk_samples=max(1024, int(target_sr * chunk_seconds)),
+                preferred_chunk_samples=preferred_samples,
             )
             if channels <= 0 or sr <= 0:
                 raise RuntimeError(f"Invalid streaming decoder info: sr={sr}, channels={channels}")
@@ -1353,130 +1453,59 @@ class DSREProcessor:
                 channels=channels,
             )
 
-            core_samples = max(1024, int(sr * chunk_seconds))
-            overlap_samples = int(sr * overlap_seconds)
-            overlap_samples = int(np.clip(overlap_samples, 0, max(0, core_samples // 4)))
-
-            # Decoder reads in core-sized blocks; raw_buffer stores channels-first PCM.
-            decode_buffer = np.empty((core_samples, channels), dtype=np.float32)
-            raw_buffer = np.empty((channels, 0), dtype=np.float32)
-            have_left_context = False
-            eof = False
-            window_index = 0
+            max_samples = max(1024, int(sr * chunk_seconds))
+            dsp = DSREStreamingDSP(
+                sr=sr,
+                channels=channels,
+                params=self.params,
+                context_seconds=float(self.params.get("dsp_context", overlap_seconds)),
+            )
+            decode_buffer = np.empty((max_samples, channels), dtype=np.float32)
+            chunk_index = 0
             total_in_rms = 0.0
             total_out_rms = 0.0
             rms_count = 0
 
             self.step_progress(3, "stream open")
             self.logs(
-                f"Streaming valid-region overlap: {overlap_samples} samples "
-                f"({(overlap_samples / sr) if sr else 0:.3f}s), core={core_samples} samples"
+                f"Streaming DSP state carry: context={dsp.context_samples} samples "
+                f"({(dsp.context_samples / sr) if sr else 0:.3f}s), chunk={max_samples} samples"
             )
 
             while True:
                 if self.abort_cb():
                     raise RuntimeError("Processing aborted")
 
-                # Decide how much context we need before processing the next window.
-                if overlap_samples <= 0:
-                    needed = core_samples
-                elif have_left_context:
-                    needed = overlap_samples + core_samples + overlap_samples
-                else:
-                    needed = core_samples + overlap_samples
+                samples_read, eof = native.decoder_read(
+                    dec_handle,
+                    decode_buffer,
+                    max_samples,
+                )
 
-                # Fill raw_buffer until we have enough context, or until EOF.
-                while not eof and raw_buffer.shape[1] < needed:
-                    samples_read, eof_now = native.decoder_read(
-                        dec_handle,
-                        decode_buffer,
-                        core_samples,
-                    )
-                    if samples_read > 0:
-                        chunk = np.ascontiguousarray(
-                            decode_buffer[:samples_read, :].T,
-                            dtype=np.float32,
-                        )
-                        raw_buffer = np.ascontiguousarray(
-                            np.concatenate((raw_buffer, chunk), axis=1),
-                            dtype=np.float32,
-                        )
-                        chunk = None
-                    if eof_now:
-                        eof = True
-                        break
-
-                if raw_buffer.shape[1] == 0 and eof:
-                    break
-
-                # If EOF arrived before a full contextual window, process remaining samples.
-                if eof and raw_buffer.shape[1] < needed:
-                    window_index += 1
-                    processed = process_window(raw_buffer)
-                    if overlap_samples > 0 and have_left_context:
-                        valid = processed[:, min(overlap_samples, processed.shape[1]):]
-                    else:
-                        valid = processed
-                    write_ch_first_to_encoder(enc_handle, valid)
+                if samples_read > 0:
+                    chunk_index += 1
+                    chunk = np.ascontiguousarray(decode_buffer[:samples_read, :].T, dtype=np.float32)
+                    processed = dsp.process(chunk)
+                    write_ch_first_to_encoder(enc_handle, processed)
 
                     try:
-                        total_in_rms += audio_rms(raw_buffer)
-                        total_out_rms += audio_rms(valid)
+                        total_in_rms += audio_rms(chunk)
+                        total_out_rms += audio_rms(processed)
                         rms_count += 1
                     except Exception:
                         pass
 
-                    raw_buffer = np.empty((channels, 0), dtype=np.float32)
+                    self.step_progress(min(94, 8 + (chunk_index % 86)), f"chunk {chunk_index}")
+                    chunk = None
                     processed = None
-                    valid = None
                     force_release_memory()
+
+                if eof:
                     break
 
-                window_index += 1
-
-                if overlap_samples <= 0:
-                    window_len = min(core_samples, raw_buffer.shape[1])
-                    window = raw_buffer[:, :window_len]
-                    processed = process_window(window)
-                    write_ch_first_to_encoder(enc_handle, processed)
-                    raw_buffer = np.ascontiguousarray(raw_buffer[:, window_len:], dtype=np.float32)
-                    valid = processed
-                elif have_left_context:
-                    window_len = overlap_samples + core_samples + overlap_samples
-                    window = raw_buffer[:, :window_len]
-                    processed = process_window(window)
-                    valid_start = min(overlap_samples, processed.shape[1])
-                    valid_end = min(valid_start + core_samples, processed.shape[1])
-                    valid = processed[:, valid_start:valid_end]
-                    write_ch_first_to_encoder(enc_handle, valid)
-                    # Drop left context + valid core; keep right overlap as next left context.
-                    drop = min(overlap_samples + core_samples, raw_buffer.shape[1])
-                    raw_buffer = np.ascontiguousarray(raw_buffer[:, drop:], dtype=np.float32)
-                else:
-                    window_len = core_samples + overlap_samples
-                    window = raw_buffer[:, :window_len]
-                    processed = process_window(window)
-                    valid_end = min(core_samples, processed.shape[1])
-                    valid = processed[:, :valid_end]
-                    write_ch_first_to_encoder(enc_handle, valid)
-                    # Drop first valid core; keep right overlap as next left context.
-                    drop = min(core_samples, raw_buffer.shape[1])
-                    raw_buffer = np.ascontiguousarray(raw_buffer[:, drop:], dtype=np.float32)
-                    have_left_context = overlap_samples > 0 and raw_buffer.shape[1] > 0
-
-                try:
-                    total_in_rms += audio_rms(window)
-                    total_out_rms += audio_rms(valid)
-                    rms_count += 1
-                except Exception:
-                    pass
-
-                self.step_progress(min(94, 8 + (window_index % 86)), f"window {window_index}")
-
-                window = None
-                processed = None
-                valid = None
-                force_release_memory()
+            tail = dsp.flush()
+            if tail is not None and tail.size > 0:
+                write_ch_first_to_encoder(enc_handle, tail)
 
             self.step_progress(96, "finalizing")
             native.encoder_close(enc_handle)
@@ -1803,7 +1832,7 @@ class DSREKivyRoot(BoxLayout):
         header = MaterialCard(orientation="vertical", size_hint_y=None, height=dp(70), padding=dp(10))
         header.add_widget(MaterialLabel(text="DSRE Audio Enhancer", font_size="20sp", bold=True, size_hint_y=None, height=dp(30)))
         font_info = get_ui_font() or "_ja_JP.ttf not found"
-        header.add_widget(SmallLabel(text="version: 1.1.0"))
+        header.add_widget(SmallLabel(text="version: 2.0.0"))
         self.add_widget(header)
 
         scroll = ScrollView(do_scroll_x=False)
@@ -1881,16 +1910,17 @@ class DSREKivyRoot(BoxLayout):
         proc_card.bind(minimum_height=proc_card.setter("height"))
         proc_card.add_widget(SectionTitle(text="処理"))
         action_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
-        start = MaterialButton(text="開始", kind="primary")
-        cancel = MaterialButton(text="キャンセル", kind="danger")
-        retry = MaterialButton(text="再処理", kind="flat")
-        start.bind(on_release=lambda *_: self.start_processing())
-        cancel.bind(on_release=lambda *_: self.cancel_processing())
-        retry.bind(on_release=lambda *_: self.start_processing())
-        action_row.add_widget(start)
-        action_row.add_widget(cancel)
-        action_row.add_widget(retry)
+        self.start_button = MaterialButton(text="開始", kind="primary")
+        self.cancel_button = MaterialButton(text="キャンセル", kind="danger")
+        self.retry_button = MaterialButton(text="再処理", kind="flat")
+        self.start_button.bind(on_release=lambda *_: self.start_processing())
+        self.cancel_button.bind(on_release=lambda *_: self.cancel_processing())
+        self.retry_button.bind(on_release=lambda *_: self.start_processing())
+        action_row.add_widget(self.start_button)
+        action_row.add_widget(self.cancel_button)
+        action_row.add_widget(self.retry_button)
         proc_card.add_widget(action_row)
+        self.update_action_buttons()
         proc_card.add_widget(SmallLabel(text="現在ファイル"))
         self.file_bar = ProgressBar(max=100, value=0, size_hint_y=None, height=dp(14))
         proc_card.add_widget(self.file_bar)
@@ -1986,7 +2016,25 @@ class DSREKivyRoot(BoxLayout):
             "stereo_width": float(np.clip(float(self.input_stereo_width.text.strip() or "1.15"), 1.0, 1.8)),
             "dynamic": float(np.clip(float(self.input_dynamic.text.strip() or "1.12"), 1.0, 1.5)),
             "chunk_threshold_mb": max(1.0, float(self.input_chunk_threshold.text.strip() or "150")),
+            "dsp_context": float(np.clip(float(self.input_dsp_context.text.strip() or "0.04"), 0.0, 0.20)),
         }
+
+    def update_action_buttons(self):
+        # Enable/disable processing action buttons based on processing state.
+        is_processing = bool(self.processing)
+
+        start = getattr(self, "start_button", None)
+        retry = getattr(self, "retry_button", None)
+        cancel = getattr(self, "cancel_button", None)
+
+        for btn in (start, retry):
+            if btn is not None:
+                btn.disabled = is_processing
+                btn.opacity = 0.45 if is_processing else 1.0
+
+        if cancel is not None:
+            cancel.disabled = not is_processing
+            cancel.opacity = 1.0 if is_processing else 0.45
 
     def start_processing(self):
         if self.processing:
@@ -2004,6 +2052,9 @@ class DSREKivyRoot(BoxLayout):
         os.makedirs(output_dir, exist_ok=True)
         self.processing = True
         self.cancel_requested = False
+        self.update_action_buttons()
+        self._processor_finished = False
+        self._finish_poll_event = None
         self.file_bar.value = 0
         self.overall_bar.value = 0
         self.status_label.text = "Processing..."
@@ -2019,12 +2070,21 @@ class DSREKivyRoot(BoxLayout):
         )
         self.processor_thread = threading.Thread(target=self._run_processor, args=(processor,), daemon=True)
         self.processor_thread.start()
+        # Schedule polling from the Kivy main thread. The worker thread must not schedule Clock callbacks.
+        self._finish_poll_event = Clock.schedule_interval(self._poll_processor_finished, 0.2)
 
     def _run_processor(self, processor):
         try:
             processor.run()
         finally:
-            self.on_processing_finished()
+            # Do not touch Kivy widgets and do not call Clock from this worker thread.
+            self._processor_finished = True
+
+    def _poll_processor_finished(self, _dt):
+        if not getattr(self, "_processor_finished", False):
+            return True
+        self.on_processing_finished()
+        return False
 
     def abort_requested(self):
         return self.cancel_requested
@@ -2036,6 +2096,9 @@ class DSREKivyRoot(BoxLayout):
         Clock.schedule_once(_update, 0)
 
     def update_file_progress(self, done, total, fname):
+        # Ignore late queued progress callbacks after finish/cancel has been applied.
+        if not self.processing:
+            return
         self.overall_bar.value = int(done * 100 / max(1, total))
         self.status_label.text = f"{done}/{total}: {fname}" if fname else "Processing..."
 
@@ -2090,6 +2153,33 @@ class DSREKivyRoot(BoxLayout):
         
         self.update_status("Ready")
 
+    def show_alert(self, title: str, message: str):
+        # Small in-app modal alert. Safe to call from UI/main thread handlers.
+        try:
+            popup = ModalView(size_hint=(0.88, None), height=dp(190), auto_dismiss=True)
+            root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
+            root.add_widget(SectionTitle(text=str(title)))
+            root.add_widget(
+                MaterialLabel(
+                    text=str(message),
+                    size_hint_y=None,
+                    height=dp(78),
+                    halign="left",
+                    valign="middle",
+                )
+            )
+            ok = MaterialButton(text="OK", kind="primary", size_hint_y=None, height=dp(42))
+            ok.bind(on_release=lambda *_: popup.dismiss())
+            root.add_widget(ok)
+            popup.add_widget(root)
+            popup.open()
+        except Exception:
+            # Alert must never break config save/load.
+            try:
+                self.write_log(f"{title}: {message}")
+            except Exception:
+                pass
+
     def save_config(self):
         try:
             config = {
@@ -2100,13 +2190,17 @@ class DSREKivyRoot(BoxLayout):
                 "stereo_width": self.input_stereo_width.text,
                 "dynamic": self.input_dynamic.text,
                 "chunk_threshold_mb": self.input_chunk_threshold.text,
+            "dsp_context": self.input_dsp_context.text,
                 "output_dir": self.input_output_dir.text,
                 "last_directory": self.input_directory.text,
                 "last_file": self.input_file.text,
             }
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
+            self.write_log(f"[green]設定を保存しました:[/] {CONFIG_FILE}")
+            self.status_label.text = "設定を保存しました"
             self.write_log("Config saved")
+            self.show_alert("設定保存", f"設定を書き込みました\n{CONFIG_FILE}")
         except Exception as e:
             self.write_log(f"Failed to save config: {e}")
 
@@ -2123,11 +2217,14 @@ class DSREKivyRoot(BoxLayout):
             self.input_stereo_width.text = str(config.get("stereo_width", "1.15"))
             self.input_dynamic.text = str(config.get("dynamic", "1.12"))
             self.input_chunk_threshold.text = str(config.get("chunk_threshold_mb", "150"))
+            self.input_dsp_context.text = str(config.get("dsp_context", "0.04"))
             self.input_output_dir.text = str(config.get("output_dir", os.path.join(EXTERNAL_STORAGE, "Documents", "enhanced_output")))
             self.input_directory.text = str(config.get("last_directory", ""))
             self.input_file.text = str(config.get("last_file", ""))
             if log:
                 self.write_log("Config loaded")
+            self.write_log(f"[green]設定を読み込みました:[/] {CONFIG_FILE}")
+            self.status_label.text = "設定を読み込みました"
         except Exception as e:
             self.write_log(f"Failed to load config: {e}")
 
