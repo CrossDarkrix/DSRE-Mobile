@@ -2,16 +2,12 @@ import json
 import os
 import re
 import shutil
-import subprocess
-import ssl
 import sys
-import tempfile
 import threading
+import tempfile
 import time
 import traceback
-import zipfile
-import urllib.request
-import io
+from ctypes import CDLL, POINTER, byref, c_char_p, c_float, c_int, c_void_p
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -30,11 +26,14 @@ from kivy.uix.progressbar import ProgressBar
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
-ssl._create_default_https_context = ssl._create_unverified_context
 
-APP_NAME = "DSRE Kivy Mobile v1.1"
-CONFIG_FILE = os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "DSRE", "dsre_kivy_config.json")
-os.makedirs(os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "DSRE"), exist_ok=True)
+
+APP_NAME = "DSRE Kivy Mobile CDLL v1.5"
+APP_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+EXTERNAL_STORAGE = os.getenv("EXTERNAL_STORAGE") or os.path.expanduser("~")
+DSRE_DOCUMENT_DIR = os.path.join(EXTERNAL_STORAGE, "Documents", "DSRE")
+os.makedirs(DSRE_DOCUMENT_DIR, exist_ok=True)
+CONFIG_FILE = os.path.join(DSRE_DOCUMENT_DIR, "dsre_kivy_config.json")
 AUDIO_EXTENSIONS = {
     ".wav",
     ".mp3",
@@ -48,77 +47,210 @@ AUDIO_EXTENSIONS = {
     ".mka",
 }
 
-def _download_ffmpeg():
-    os.makedirs(os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "DSRE", "bin"), exist_ok=True)
-    win_ffmpeg = urllib.request.urlopen(urllib.request.Request(
-        'https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/bin/ffmpegs.zip', headers={
-            'User-Agent': 'Mozilla/5.0 (Linux; U; Android 8.0; en-la; Nexus Build/JPG991) AppleWebKit/511.2 (KHTML, like Gecko) Version/5.0 Mobile/11S444 YJApp-ANDROID jp.co.yahoo.android.yjtop/4.01.1.5'})).read()
-    with zipfile.ZipFile(io.BytesIO(win_ffmpeg)) as ffmpegzip:
-        ffmpegzip.extractall(os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "DSRE", "bin"))
-        os.chmod(os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "DSRE", "bin", 'ffmpeg'), 0o755)
-        os.chmod(os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "DSRE", "bin", 'ffprobe'), 0o755)
+class DSRENativeAudio:
+    """ctypes.CDLL wrapper for libdsre_audio.so.
 
-def _check_ffmpeg():
-    if os.path.exists(os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "DSRE", "bin", 'ffmpeg')):
-        return os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "DSRE", "bin", 'ffmpeg'), os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "DSRE", "bin", 'ffprobe')
-    else:
-        _download_ffmpeg()
-        return os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "DSRE", "bin", 'ffmpeg'), os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "DSRE", "bin", 'ffprobe')
+    libdsre_audio.so は Android APK の native library として同梱してください。
+    Buildozer では android.add_libs_arm64_v8a などで配置する想定です。
 
+    C側PCMレイアウト:
+      - decode output: interleaved float32, samples x channels
+      - encode input : interleaved float32, samples x channels
 
-def _decode_subprocess_output(data: bytes) -> str:
-    if data is None:
-        return ""
-    if isinstance(data, str):
-        return data
-    for enc in ("utf-8", "cp932", "utf-16-le", "utf-16-be"):
+    Python/DSRE内部レイアウト:
+      - channels-first float32, channels x samples
+    """
+
+    def __init__(self, lib_path: Optional[str] = None):
+        self.lib_path = lib_path or self._find_library_path()
+        self.lib = CDLL(self.lib_path)
+        self._bind_functions()
+
+    def _find_library_path(self) -> str:
+        candidates = [
+            "libdsre_audio.so",
+            os.path.join(APP_BASE_DIR, "libdsre_audio.so"),
+            os.path.join(os.getcwd(), "libdsre_audio.so"),
+            os.path.join(APP_BASE_DIR, "native_libs", "libdsre_audio.so"),
+        ]
+        errors = []
+        for candidate in candidates:
+            try:
+                CDLL(candidate)
+                return candidate
+            except OSError as exc:
+                errors.append(f"{candidate}: {exc}")
+        raise RuntimeError(
+            "libdsre_audio.so をロードできません。Buildozer の android.add_libs_* で "
+            "libdsre_audio.so と FFmpeg 依存 .so を同梱してください。\n" + "\n".join(errors)
+        )
+
+    def _bind_functions(self):
+        self.lib.dsre_decode_to_f32.argtypes = [
+            c_char_p,
+            c_int,
+            POINTER(POINTER(c_float)),
+            POINTER(c_int),
+            POINTER(c_int),
+        ]
+        self.lib.dsre_decode_to_f32.restype = c_int
+
+        self.lib.dsre_encode_from_f32.argtypes = [
+            c_char_p,
+            POINTER(c_float),
+            c_int,
+            c_int,
+            c_int,
+            c_char_p,
+            c_char_p,
+        ]
+        self.lib.dsre_encode_from_f32.restype = c_int
+
+        self.lib.dsre_free.argtypes = [c_void_p]
+        self.lib.dsre_free.restype = None
+
+        self.lib.dsre_last_error.argtypes = []
+        self.lib.dsre_last_error.restype = c_char_p
+
+    def last_error(self) -> str:
+        value = self.lib.dsre_last_error()
+        return value.decode("utf-8", errors="replace") if value else ""
+
+    def decode(self, input_path: str, target_sr: int) -> Tuple[np.ndarray, int]:
+        pcm_ptr = POINTER(c_float)()
+        channels = c_int()
+        samples = c_int()
+
+        ret = self.lib.dsre_decode_to_f32(
+            os.fsencode(input_path),
+            int(target_sr),
+            byref(pcm_ptr),
+            byref(channels),
+            byref(samples),
+        )
+        if ret != 0:
+            raise RuntimeError(f"dsre_decode_to_f32 failed: {ret}: {self.last_error()}")
+
         try:
-            return data.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return data.decode("utf-8", errors="replace")
+            ch = int(channels.value)
+            smp = int(samples.value)
+            if ch <= 0 or smp <= 0:
+                raise RuntimeError(f"Invalid decoded shape: channels={ch}, samples={smp}")
+            total = ch * smp
+            interleaved = np.ctypeslib.as_array(pcm_ptr, shape=(total,))
+            y = interleaved.copy().reshape(smp, ch).T
+            return sanitize_audio(y), int(target_sr)
+        finally:
+            self.lib.dsre_free(pcm_ptr)
+
+    def encode(
+        self,
+        original_path: str,
+        pcm_ch_first: np.ndarray,
+        sr: int,
+        output_path: str,
+        fmt: str,
+    ) -> str:
+        pcm = ensure_ch_first(sanitize_audio(pcm_ch_first)).astype(np.float32, copy=False)
+        channels, samples = pcm.shape
+        interleaved = np.ascontiguousarray(pcm.T, dtype=np.float32)
+
+        ret = self.lib.dsre_encode_from_f32(
+            os.fsencode(original_path or ""),
+            interleaved.ctypes.data_as(POINTER(c_float)),
+            int(channels),
+            int(samples),
+            int(sr),
+            os.fsencode(output_path),
+            str(fmt).upper().encode("utf-8"),
+        )
+        if ret != 0:
+            raise RuntimeError(f"dsre_encode_from_f32 failed: {ret}: {self.last_error()}")
+        return output_path
 
 
-def _run_subprocess(
-    cmd,
-    check: bool = False,
-    capture_stdout: bool = False,
-    capture_stderr: bool = False,
-):
-    result = subprocess.run(
-        cmd,
-        check=False,
-        stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
-        stderr=subprocess.PIPE if capture_stderr else subprocess.DEVNULL,
-    )
-
-    result.stdout_text = _decode_subprocess_output(
-        result.stdout if capture_stdout else b""
-    )
-    result.stderr_text = _decode_subprocess_output(
-        result.stderr if capture_stderr else b""
-    )
-
-    if check and result.returncode != 0:
-        err = subprocess.CalledProcessError(result.returncode, cmd)
-        err.stdout = result.stdout
-        err.stderr = result.stderr
-        err.stdout_text = result.stdout_text
-        err.stderr_text = result.stderr_text
-        raise err
-
-    return result
-
-_ffmpeg, _ffprobe = _check_ffmpeg()
+_NATIVE_AUDIO: Optional[DSRENativeAudio] = None
 
 
-def get_ffmpeg_executable() -> str:
-    return _ffmpeg
+def get_native_audio() -> DSRENativeAudio:
+    global _NATIVE_AUDIO
+    if _NATIVE_AUDIO is None:
+        _NATIVE_AUDIO = DSRENativeAudio()
+    return _NATIVE_AUDIO
 
 
-def get_ffprobe_executable() -> str:
-    return _ffprobe
+def ffprobe_audio_info(file_path: str) -> Dict[str, Any]:
+    """subprocess/ffprobe は使わないため、詳細情報は取得しない軽量スタブです。
 
+    DSREProcessor のログ互換用にキーだけ返します。実際の decode は
+    libdsre_audio.so 側の dsre_decode_to_f32 が行います。
+    """
+    return {
+        "sample_rate": 0,
+        "channels": 0,
+        "duration": 0.0,
+        "codec_name": "native",
+        "bit_rate": 0,
+    }
+
+
+def load_audio_ffmpeg(file_path: str, target_sr: int) -> Tuple[np.ndarray, int]:
+    """CDLL/native wrapper based loader. No subprocess is used."""
+    if target_sr <= 0:
+        raise ValueError(f"Invalid target sample rate: {target_sr}")
+    return get_native_audio().decode(file_path, target_sr)
+
+
+def extract_cover_image(in_path: str) -> Optional[str]:
+    """CDLL版ではPython側での画像抽出は行いません。
+
+    カバーアートの出力ファイルへの引き継ぎは、
+    libdsre_audio.so 側の dsre_encode_from_f32() 内で best-effort に実行します。
+    この関数は旧FFmpeg CLI版との互換用スタブです。
+    """
+
+    return None
+
+
+def save_with_metadata(
+    in_path: str,
+    y_out: np.ndarray,
+    sr: int,
+    out_path: str,
+    fmt: str = "ALAC",
+    normalize: bool = True,
+) -> str:
+    """CDLL/native wrapper based saver. No subprocess is used."""
+    if not os.path.exists(in_path):
+        raise FileNotFoundError(f"Input file not found: {in_path}")
+    if y_out is None or y_out.size == 0:
+        raise ValueError("Empty audio data provided")
+    if sr <= 0:
+        raise ValueError(f"Invalid sample rate: {sr}")
+
+    fmt = str(fmt).upper()
+    ext_map = {"ALAC": "m4a", "FLAC": "flac", "MP3": "mp3"}
+    if fmt not in ext_map:
+        raise ValueError(f"Unsupported format: {fmt}")
+
+    data = sanitize_audio(y_out)
+    if normalize:
+        peak = audio_peak(data)
+        if peak > 1.0:
+            data = data / peak
+    else:
+        data = np.clip(data, -1.0, 1.0).astype(np.float32, copy=False)
+
+    if audio_peak(data) < 1e-10:
+        raise ValueError("Audio data is essentially silent - cannot save")
+
+    out_path = os.path.splitext(out_path)[0] + "." + ext_map[fmt]
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    result_path = get_native_audio().encode(in_path, data, sr, out_path, fmt)
+
+    if not os.path.exists(result_path) or os.path.getsize(result_path) < 1000:
+        raise RuntimeError(f"Output file was not created correctly: {result_path}")
+    return result_path
 
 def is_audio_file(path: str) -> bool:
     return (
@@ -219,370 +351,6 @@ def audio_rms(x: np.ndarray) -> float:
     if x is None or x.size == 0:
         return 0.0
     return float(np.sqrt(np.mean(np.square(np.asarray(x, dtype=np.float64)))))
-
-
-def ffprobe_audio_info(file_path: str) -> Dict[str, Any]:
-    ffprobe = get_ffprobe_executable()
-
-    cmd = [
-        ffprobe,
-        "-v",
-        "error",
-        "-print_format",
-        "json",
-        "-show_streams",
-        "-show_format",
-        file_path,
-    ]
-
-    result = _run_subprocess(cmd, capture_stdout=True)
-    data = json.loads(result.stdout_text)
-
-    audio_stream = None
-    for stream in data.get("streams", []):
-        if stream.get("codec_type") == "audio":
-            audio_stream = stream
-            break
-
-    if not audio_stream:
-        raise ValueError(f"No audio stream found: {file_path}")
-
-    return {
-        "sample_rate": int(audio_stream.get("sample_rate", 0) or 0),
-        "channels": int(audio_stream.get("channels", 0) or 0),
-        "duration": float(
-            audio_stream.get(
-                "duration",
-                data.get("format", {}).get("duration", 0),
-            )
-            or 0.0
-        ),
-        "codec_name": audio_stream.get("codec_name", ""),
-        "bit_rate": int(
-            audio_stream.get(
-                "bit_rate",
-                data.get("format", {}).get("bit_rate", 0),
-            )
-            or 0
-        ),
-    }
-
-
-def load_audio_ffmpeg(file_path: str, target_sr: int) -> Tuple[np.ndarray, int]:
-    """Load audio via FFmpeg without the soundfile module.
-
-    FFmpeg decodes the first audio stream to raw little-endian float32 PCM
-    and writes it to stdout. NumPy then reshapes the interleaved PCM into
-    DSRE's internal channel-first shape: (channels, samples).
-    """
-    if target_sr <= 0:
-        raise ValueError(f"Invalid target sample rate: {target_sr}")
-
-    ffmpeg = get_ffmpeg_executable()
-
-    try:
-        info = ffprobe_audio_info(file_path)
-        channels = int(info.get("channels", 0) or 0)
-    except Exception:
-        channels = 0
-
-    if channels <= 0:
-        channels = 1
-
-    cmd = [
-        ffmpeg,
-        "-nostdin",
-        "-i",
-        file_path,
-        "-vn",
-        "-sn",
-        "-dn",
-        "-map",
-        "0:a:0",
-        "-ar",
-        str(target_sr),
-        "-f",
-        "f32le",
-        "-acodec",
-        "pcm_f32le",
-        "pipe:1",
-    ]
-
-    try:
-        result = _run_subprocess(
-            cmd,
-            check=True,
-            capture_stdout=True,
-            capture_stderr=True,
-        )
-    except subprocess.CalledProcessError as e:
-        stderr = getattr(e, "stderr_text", "") or _decode_subprocess_output(e.stderr)
-        stdout = getattr(e, "stdout_text", "") or _decode_subprocess_output(e.stdout)
-        raise RuntimeError(
-            f"FFmpeg decode failed: {' '.join(cmd)}\n"
-            f"STDERR:\n{stderr}\n"
-            f"STDOUT:\n{stdout}"
-        )
-
-    raw_bytes = result.stdout or b""
-    if not raw_bytes:
-        raise RuntimeError(f"FFmpeg produced no PCM data: {file_path}")
-
-    raw = np.frombuffer(raw_bytes, dtype="<f4")
-    if raw.size == 0:
-        raise RuntimeError(f"Decoded PCM is empty: {file_path}")
-
-    usable = (raw.size // channels) * channels
-    if usable <= 0:
-        raise RuntimeError(
-            f"Decoded PCM size is not compatible with channels={channels}: {file_path}"
-        )
-    if usable != raw.size:
-        raw = raw[:usable]
-
-    frames = raw.reshape(-1, channels)
-    y = frames.T.astype(np.float32, copy=False)
-    return sanitize_audio(y), int(target_sr)
-
-
-def extract_cover_image(in_path: str) -> Optional[str]:
-    ffmpeg = get_ffmpeg_executable()
-
-    cover_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-    cover_tmp.close()
-
-    cmd = [
-        ffmpeg,
-        "-i",
-        in_path,
-        "-an",
-        "-map",
-        "0:v:0",
-        "-frames:v",
-        "1",
-        "-y",
-        cover_tmp.name,
-    ]
-
-    try:
-        result = _run_subprocess(cmd)
-        if (
-            result.returncode == 0
-            and os.path.exists(cover_tmp.name)
-            and os.path.getsize(cover_tmp.name) > 0
-        ):
-            return cover_tmp.name
-    except Exception:
-        pass
-
-    try:
-        os.remove(cover_tmp.name)
-    except Exception:
-        pass
-
-    return None
-
-
-def save_with_metadata(
-    in_path: str,
-    y_out: np.ndarray,
-    sr: int,
-    out_path: str,
-    fmt: str = "ALAC",
-    normalize: bool = True,
-) -> str:
-    """Save processed audio with FFmpeg only; soundfile is not required.
-
-    The processed NumPy array is written as raw float32 PCM to a temporary
-    .f32 file. FFmpeg reads that raw PCM and encodes ALAC/FLAC/MP3 while
-    copying metadata from the original input file.
-    """
-    if not os.path.exists(in_path):
-        raise FileNotFoundError(f"Input file not found: {in_path}")
-
-    if y_out is None or y_out.size == 0:
-        raise ValueError("Empty audio data provided")
-
-    if sr <= 0:
-        raise ValueError(f"Invalid sample rate: {sr}")
-
-    ffmpeg = get_ffmpeg_executable()
-
-    fmt = fmt.upper()
-    if fmt not in ("ALAC", "FLAC", "MP3"):
-        raise ValueError(f"Unsupported format: {fmt}")
-
-    data = ensure_sf_shape(sanitize_audio(y_out)).astype(np.float32, copy=False)
-
-    if normalize:
-        peak = float(np.max(np.abs(data))) if data.size else 0.0
-        if peak > 1.0:
-            data = data / peak
-    else:
-        data = np.clip(data, -1.0, 1.0)
-
-    if data.size == 0 or np.max(np.abs(data)) < 1e-10:
-        raise ValueError("Audio data is essentially silent - cannot save")
-
-    if data.ndim == 1:
-        data = data[:, None]
-    if data.ndim != 2:
-        raise ValueError(f"Unsupported output audio shape: {data.shape}")
-
-    channels = int(data.shape[1])
-    if channels <= 0:
-        raise ValueError(f"Invalid channel count: {channels}")
-
-    tmp_raw = tempfile.NamedTemporaryFile(delete=False, suffix=".f32")
-    tmp_raw.close()
-    cover_tmp = None
-
-    try:
-        np.asarray(data, dtype="<f4").tofile(tmp_raw.name)
-
-        codec_map = {
-            "ALAC": "alac",
-            "FLAC": "flac",
-            "MP3": "libmp3lame",
-        }
-
-        ext_map = {
-            "ALAC": "m4a",
-            "FLAC": "flac",
-            "MP3": "mp3",
-        }
-
-        sample_fmt_map = {
-            "ALAC": "s32p",
-            "FLAC": "s32",
-            "MP3": "s16p",
-        }
-
-        out_path = os.path.splitext(out_path)[0] + "." + ext_map[fmt]
-        cover_tmp = extract_cover_image(in_path)
-
-        raw_input = [
-            ffmpeg,
-            "-nostdin",
-            "-f",
-            "f32le",
-            "-ar",
-            str(sr),
-            "-ac",
-            str(channels),
-            "-i",
-            tmp_raw.name,
-            "-i",
-            in_path,
-        ]
-
-        if fmt == "MP3":
-            if cover_tmp:
-                cmd = raw_input + [
-                    "-i",
-                    cover_tmp,
-                    "-map",
-                    "0:a",
-                    "-map",
-                    "2:v",
-                    "-map_metadata",
-                    "1",
-                    "-id3v2_version",
-                    "3",
-                    "-c:a",
-                    codec_map[fmt],
-                    "-sample_fmt",
-                    sample_fmt_map[fmt],
-                    "-b:a",
-                    "320k",
-                    "-c:v",
-                    "mjpeg",
-                    "-y",
-                    out_path,
-                ]
-            else:
-                cmd = raw_input + [
-                    "-map",
-                    "0:a",
-                    "-map_metadata",
-                    "1",
-                    "-c:a",
-                    codec_map[fmt],
-                    "-sample_fmt",
-                    sample_fmt_map[fmt],
-                    "-b:a",
-                    "320k",
-                    "-y",
-                    out_path,
-                ]
-        else:
-            if cover_tmp:
-                cmd = raw_input + [
-                    "-i",
-                    cover_tmp,
-                    "-map",
-                    "0:a",
-                    "-map",
-                    "2:v",
-                    "-disposition:v",
-                    "attached_pic",
-                    "-map_metadata",
-                    "1",
-                    "-c:a",
-                    codec_map[fmt],
-                    "-sample_fmt",
-                    sample_fmt_map[fmt],
-                    "-c:v",
-                    "copy",
-                    "-y",
-                    out_path,
-                ]
-            else:
-                cmd = raw_input + [
-                    "-map",
-                    "0:a",
-                    "-map_metadata",
-                    "1",
-                    "-c:a",
-                    codec_map[fmt],
-                    "-sample_fmt",
-                    sample_fmt_map[fmt],
-                    "-y",
-                    out_path,
-                ]
-
-        _run_subprocess(
-            cmd,
-            check=True,
-            capture_stdout=True,
-            capture_stderr=True,
-        )
-
-        if not os.path.exists(out_path) or os.path.getsize(out_path) < 1000:
-            raise RuntimeError(f"Output file was not created correctly: {out_path}")
-
-        return out_path
-
-    except subprocess.CalledProcessError as e:
-        stderr = getattr(e, "stderr_text", "") or _decode_subprocess_output(e.stderr)
-        stdout = getattr(e, "stdout_text", "") or _decode_subprocess_output(e.stdout)
-        raise RuntimeError(
-            f"FFmpeg command failed: {' '.join(cmd)}\n"
-            f"STDERR:\n{stderr}\n"
-            f"STDOUT:\n{stdout}"
-        )
-
-    finally:
-        try:
-            os.remove(tmp_raw.name)
-        except Exception:
-            pass
-
-        if cover_tmp and os.path.exists(cover_tmp):
-            try:
-                os.remove(cover_tmp)
-            except Exception:
-                pass
 
 
 def apply_iir_filter(b, a, x):
@@ -1806,8 +1574,6 @@ class DSREKivyRoot(BoxLayout):
 
     def write_log(self, message):
         clean = strip_status_text(message)
-        if clean and hasattr(self, "last_message_label"):
-            self.last_message_label.text = clean[:180]
 
     def thread_log(self, message):
         clean = strip_status_text(message)
@@ -1888,14 +1654,13 @@ class DSREKivyRoot(BoxLayout):
         except Exception as e:
             self.write_log(f"Invalid parameters: {e}")
             return
-        output_dir = os.path.abspath(os.path.expanduser(self.input_output_dir.text.strip() or os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "enhanced_output")))
+        output_dir = os.path.abspath(os.path.expanduser(self.input_output_dir.text.strip() or os.path.join(EXTERNAL_STORAGE, "Documents", "enhanced_output")))
         os.makedirs(output_dir, exist_ok=True)
         self.processing = True
         self.cancel_requested = False
         self.file_bar.value = 0
         self.overall_bar.value = 0
         self.status_label.text = "Processing..."
-        self.last_message_label.text = "Processing started"
         processor = DSREProcessor(
             files=list(self.files),
             output_dir=output_dir,
@@ -1913,10 +1678,7 @@ class DSREKivyRoot(BoxLayout):
         try:
             processor.run()
         finally:
-            def _finish(_dt):
-                self.on_processing_finished()
-                return None
-            Clock.schedule_once(_finish, 0)
+            self.on_processing_finished()
 
     def abort_requested(self):
         return self.cancel_requested
@@ -1960,14 +1722,14 @@ class DSREKivyRoot(BoxLayout):
         self.cancel_requested = False
         self.file_bar.value = 100
         self.status_label.text = "Finished"
-        self.last_message_label.text = "Finished"
+        
         self.update_status()
 
     def cancel_processing(self):
         if self.processing:
             self.cancel_requested = True
             self.status_label.text = "Cancel requested"
-            self.last_message_label.text = "Cancel requested"
+            
         else:
             self.write_log("No active processing")
 
@@ -1978,7 +1740,7 @@ class DSREKivyRoot(BoxLayout):
         self.files = []
         self.file_bar.value = 0
         self.overall_bar.value = 0
-        self.last_message_label.text = "Cleared"
+        
         self.update_status("Ready")
 
     def save_config(self):
@@ -2014,7 +1776,7 @@ class DSREKivyRoot(BoxLayout):
             self.input_stereo_width.text = str(config.get("stereo_width", "1.15"))
             self.input_dynamic.text = str(config.get("dynamic", "1.12"))
             self.input_chunk_threshold.text = str(config.get("chunk_threshold_mb", "150"))
-            self.input_output_dir.text = str(config.get("output_dir", os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "enhanced_output")))
+            self.input_output_dir.text = str(config.get("output_dir", os.path.join(EXTERNAL_STORAGE, "Documents", "enhanced_output")))
             self.input_directory.text = str(config.get("last_directory", ""))
             self.input_file.text = str(config.get("last_file", ""))
             if log:
