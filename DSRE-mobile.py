@@ -2128,14 +2128,32 @@ class DSREKivyRoot(BoxLayout):
         )
 
     def on_processing_finished(self):
-        force_release_memory()
+        try:
+            force_release_memory()
+        except Exception:
+            pass
+
+        was_cancel_requested = bool(getattr(self, "cancel_requested", False))
+
+        # Mark processing as fully stopped before updating action buttons.
         self.processing = False
         self.cancel_requested = False
-        self.file_bar.value = 100
-        self.status_label.text = "Finished"
-        
-        self.update_status()
+        self._processor_finished = False
 
+        # Restore button state: Start/Retry enabled, Cancel disabled.
+        try:
+            self.update_action_buttons()
+        except Exception:
+            pass
+
+        try:
+            self.file_bar.value = 100
+            self.overall_bar.value = 100
+        except Exception:
+            pass
+
+        self.status_label.text = "Canceled" if was_cancel_requested else "Finished"
+        self.update_status()
     def cancel_processing(self):
         if self.processing:
             self.cancel_requested = True
