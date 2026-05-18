@@ -1402,7 +1402,7 @@ class DSREProcessor:
         target_sr: int,
         fmt: str,
         chunk_seconds: float = 6.0,
-        overlap_seconds: float = 0.04,
+        overlap_seconds: float = 0.0,
     ) -> str:
         """Decode/process/encode using stateful DSP carry-over.
 
@@ -1458,7 +1458,7 @@ class DSREProcessor:
                 sr=sr,
                 channels=channels,
                 params=self.params,
-                context_seconds=float(self.params.get("dsp_context", overlap_seconds)),
+                context_seconds=float(self.params.get("dsp_context", 0.0)),
             )
             decode_buffer = np.empty((max_samples, channels), dtype=np.float32)
             chunk_index = 0
@@ -1885,7 +1885,7 @@ class DSREKivyRoot(BoxLayout):
         self.input_stereo_width = self._param(param_card, "Stereo Width", "1.15")
         self.input_dynamic = self._param(param_card, "Dynamic", "1.12")
         self.input_chunk_threshold = self._param(param_card, "Chunk MB", "150")
-        self.input_dsp_context = self._param(param_card, "DSP Context sec", "0.04")
+        self.input_dsp_context = self._param(param_card, "DSP Context sec", "0.00")
         param_card.add_widget(SmallLabel(text="Output Directory"))
         row_out = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
         if os.getenv('EXTERNAL_STORAGE'):
@@ -2017,7 +2017,7 @@ class DSREKivyRoot(BoxLayout):
             "stereo_width": float(np.clip(float(self.input_stereo_width.text.strip() or "1.15"), 1.0, 1.8)),
             "dynamic": float(np.clip(float(self.input_dynamic.text.strip() or "1.12"), 1.0, 1.5)),
             "chunk_threshold_mb": max(1.0, float(self.input_chunk_threshold.text.strip() or "150")),
-            "dsp_context": float(np.clip(float(self.input_dsp_context.text.strip() or "0.04"), 0.0, 0.20)),
+            "dsp_context": float(np.clip(float(self.input_dsp_context.text.strip() or "0.00"), 0.0, 0.08)),
         }
 
     def update_action_buttons(self):
@@ -2191,7 +2191,7 @@ class DSREKivyRoot(BoxLayout):
                 "stereo_width": self.input_stereo_width.text,
                 "dynamic": self.input_dynamic.text,
                 "chunk_threshold_mb": self.input_chunk_threshold.text,
-                "dsp_context": getattr(self, "input_dsp_context", None).text if getattr(self, "input_dsp_context", None) else "0.04",
+                "dsp_context": getattr(self, "input_dsp_context", None).text if getattr(self, "input_dsp_context", None) else "0.00",
                 "output_dir": self.input_output_dir.text,
                 "last_directory": self.input_directory.text,
                 "last_file": self.input_file.text,
@@ -2233,7 +2233,7 @@ class DSREKivyRoot(BoxLayout):
             self.input_dynamic.text = str(config.get("dynamic", "1.12"))
             self.input_chunk_threshold.text = str(config.get("chunk_threshold_mb", "150"))
             if hasattr(self, "input_dsp_context"):
-                self.input_dsp_context.text = str(config.get("dsp_context", "0.04"))
+                self.input_dsp_context.text = str(config.get("dsp_context", "0.00"))
             self.input_output_dir.text = str(
                 config.get(
                     "output_dir",

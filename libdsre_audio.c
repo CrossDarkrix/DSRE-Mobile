@@ -459,7 +459,7 @@ static int dsre_copy_metadata_and_cover_from_original(
         AVStream* in_stream = in_fmt->streams[i];
 
         if (!in_stream || !in_stream->codecpar) continue;
-        if (!(in_stream->disposition & AV_DISPOSITION_ATTACHED_PIC)) continue;
+        /* Some files expose cover data without the attached_pic disposition. */
         if (in_stream->attached_pic.size <= 0 || !in_stream->attached_pic.data) continue;
         if (in_stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) continue;
 
@@ -471,8 +471,19 @@ static int dsre_copy_metadata_and_cover_from_original(
 
         /* Cover art is best-effort. Never fail the whole audio encode because of it. */
         if (ret == DSRE_OK) {
-            if (out_cover_pkt) *out_cover_pkt = NULL;
-            if (out_cover_stream_index) *out_cover_stream_index = 0;
+            int cover_index = (int)out_fmt->nb_streams - 1;
+            if (out_cover_stream_index) *out_cover_stream_index = cover_index;
+            if (out_cover_pkt && cover_index >= 0 && out_fmt->streams[cover_index]) {
+                AVPacket* cloned = av_packet_clone(&out_fmt->streams[cover_index]->attached_pic);
+                if (cloned) {
+                    cloned->stream_index = cover_index;
+                    cloned->pts = 0;
+                    cloned->dts = 0;
+                    cloned->duration = 0;
+                    cloned->flags |= AV_PKT_FLAG_KEY;
+                    *out_cover_pkt = cloned;
+                }
+            }
             break;
         }
     }
@@ -1653,8 +1664,6 @@ DSRE_EXPORT int dsre_encoder_open(
 
     ret = dsre_copy_metadata_and_cover_from_original(e->out_fmt, original_path, &cover_pkt, &cover_stream_index);
     if (ret != DSRE_OK) goto fail;
-    if (cover_pkt) av_packet_free(&cover_pkt);
-    (void)cover_stream_index;
 
     if (!(e->out_fmt->oformat->flags & AVFMT_NOFILE)) {
         ret = avio_open(&e->out_fmt->pb, output_path, AVIO_FLAG_WRITE);
@@ -1662,6 +1671,21 @@ DSRE_EXPORT int dsre_encoder_open(
     }
     ret = avformat_write_header(e->out_fmt, NULL);
     if (ret < 0) { dsre_set_av_error("stream encoder avformat_write_header failed", ret); ret = DSRE_ERR_IO; goto fail; }
+
+    /* Best-effort explicit cover packet write for muxers/players that do not pick it up from attached_pic alone. */
+    if (cover_pkt && cover_stream_index >= 0) {
+        int cover_ret;
+        cover_pkt->stream_index = cover_stream_index;
+        cover_pkt->pts = 0;
+        cover_pkt->dts = 0;
+        cover_pkt->duration = 0;
+        cover_pkt->flags |= AV_PKT_FLAG_KEY;
+        cover_ret = av_interleaved_write_frame(e->out_fmt, cover_pkt);
+        if (cover_ret < 0) {
+            av_packet_unref(cover_pkt);
+        }
+        av_packet_free(&cover_pkt);
+    }
 
     av_channel_layout_default(&e->in_ch_layout, channels);
     e->in_layout_ready = 1;
@@ -1679,6 +1703,7 @@ DSRE_EXPORT int dsre_encoder_open(
     return DSRE_OK;
 
 fail:
+    if (cover_pkt) av_packet_free(&cover_pkt);
     dsre_encoder_abort(e);
     return ret;
 }
