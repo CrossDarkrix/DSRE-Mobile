@@ -1,3 +1,4 @@
+import gc
 import json
 import os
 import re
@@ -27,13 +28,57 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 
-FFLOG_FILE = os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents", "DSRE", 'fflog.txt')
-APP_NAME = "DSRE Kivy Mobile CDLL v1.5"
+APP_NAME = "DSRE Kivy Mobile CDLL v1.7-streaming"
 APP_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXTERNAL_STORAGE = os.getenv("EXTERNAL_STORAGE") or os.path.expanduser("~")
 DSRE_DOCUMENT_DIR = os.path.join(EXTERNAL_STORAGE, "Documents", "DSRE")
 os.makedirs(DSRE_DOCUMENT_DIR, exist_ok=True)
 CONFIG_FILE = os.path.join(DSRE_DOCUMENT_DIR, "dsre_kivy_config.json")
+FFLOG_FILE = os.path.join(DSRE_DOCUMENT_DIR, "fflog.txt")
+
+
+def write_fflog(
+    title: str,
+    message: str = "",
+    exc: Optional[BaseException] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Append diagnostics to Documents/DSRE/fflog.txt without crashing the app."""
+    try:
+        os.makedirs(os.path.dirname(FFLOG_FILE), exist_ok=True)
+        with open(FFLOG_FILE, "a", encoding="utf-8") as f:
+            f.write("\n" + "=" * 80 + "\n")
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
+            f.write(str(title) + "\n")
+            if message:
+                f.write(str(message) + "\n")
+            if extra:
+                try:
+                    f.write(json.dumps(extra, ensure_ascii=False, indent=2, default=str) + "\n")
+                except Exception:
+                    f.write(str(extra) + "\n")
+            if exc is not None:
+                f.write("--- exception ---\n")
+                f.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+            f.flush()
+    except Exception:
+        pass
+
+
+def force_release_memory() -> None:
+    """Best-effort cleanup for Python, NumPy and native heap pressure."""
+    try:
+        gc.collect()
+    except Exception:
+        pass
+    try:
+        libc = CDLL("libc.so")
+        malloc_trim = getattr(libc, "malloc_trim", None)
+        if malloc_trim:
+            malloc_trim(0)
+    except Exception:
+        pass
+
 AUDIO_EXTENSIONS = {
     ".wav",
     ".mp3",
@@ -112,6 +157,61 @@ class DSRENativeAudio:
         self.lib.dsre_last_error.argtypes = []
         self.lib.dsre_last_error.restype = c_char_p
 
+        self.streaming_available = False
+        self._bind_streaming_functions()
+
+    def _bind_streaming_functions(self):
+        """Bind optional streaming ABI. If the .so is old, keep legacy mode usable."""
+        try:
+            self.lib.dsre_decoder_open.argtypes = [
+                c_char_p,
+                c_int,
+                c_int,
+                POINTER(c_void_p),
+                POINTER(c_int),
+                POINTER(c_int),
+            ]
+            self.lib.dsre_decoder_open.restype = c_int
+
+            self.lib.dsre_decoder_read_f32.argtypes = [
+                c_void_p,
+                POINTER(c_float),
+                c_int,
+                POINTER(c_int),
+                POINTER(c_int),
+            ]
+            self.lib.dsre_decoder_read_f32.restype = c_int
+
+            self.lib.dsre_decoder_close.argtypes = [c_void_p]
+            self.lib.dsre_decoder_close.restype = None
+
+            self.lib.dsre_encoder_open.argtypes = [
+                c_char_p,
+                c_char_p,
+                c_char_p,
+                c_int,
+                c_int,
+                POINTER(c_void_p),
+            ]
+            self.lib.dsre_encoder_open.restype = c_int
+
+            self.lib.dsre_encoder_write_f32.argtypes = [
+                c_void_p,
+                POINTER(c_float),
+                c_int,
+            ]
+            self.lib.dsre_encoder_write_f32.restype = c_int
+
+            self.lib.dsre_encoder_close.argtypes = [c_void_p]
+            self.lib.dsre_encoder_close.restype = c_int
+
+            self.lib.dsre_encoder_abort.argtypes = [c_void_p]
+            self.lib.dsre_encoder_abort.restype = None
+
+            self.streaming_available = True
+        except AttributeError:
+            self.streaming_available = False
+
     def last_error(self) -> str:
         value = self.lib.dsre_last_error()
         return value.decode("utf-8", errors="replace") if value else ""
@@ -167,6 +267,96 @@ class DSRENativeAudio:
         if ret != 0:
             raise RuntimeError(f"dsre_encode_from_f32 failed: {ret}: {self.last_error()}")
         return output_path
+
+    def decoder_open(self, input_path: str, target_sr: int, preferred_chunk_samples: int) -> Tuple[c_void_p, int, int]:
+        if not self.streaming_available:
+            raise RuntimeError("libdsre_audio.so does not expose streaming decoder API")
+        handle = c_void_p()
+        out_sr = c_int()
+        out_channels = c_int()
+        ret = self.lib.dsre_decoder_open(
+            os.fsencode(input_path),
+            int(target_sr),
+            int(preferred_chunk_samples),
+            byref(handle),
+            byref(out_sr),
+            byref(out_channels),
+        )
+        if ret != 0:
+            raise RuntimeError(f"dsre_decoder_open failed: {ret}: {self.last_error()}")
+        return handle, int(out_sr.value), int(out_channels.value)
+
+    def decoder_read(self, handle: c_void_p, buffer: np.ndarray, max_samples: int) -> Tuple[int, bool]:
+        if not self.streaming_available:
+            raise RuntimeError("libdsre_audio.so does not expose streaming decoder API")
+        if buffer.dtype != np.float32 or not buffer.flags["C_CONTIGUOUS"]:
+            raise ValueError("decoder_read buffer must be C-contiguous float32")
+        out_samples = c_int()
+        out_eof = c_int()
+        ret = self.lib.dsre_decoder_read_f32(
+            handle,
+            buffer.ctypes.data_as(POINTER(c_float)),
+            int(max_samples),
+            byref(out_samples),
+            byref(out_eof),
+        )
+        if ret != 0:
+            raise RuntimeError(f"dsre_decoder_read_f32 failed: {ret}: {self.last_error()}")
+        return int(out_samples.value), bool(out_eof.value)
+
+    def decoder_close(self, handle: Optional[c_void_p]) -> None:
+        if handle and self.streaming_available:
+            self.lib.dsre_decoder_close(handle)
+
+    def encoder_open(
+        self,
+        original_path: str,
+        output_path: str,
+        fmt: str,
+        sr: int,
+        channels: int,
+    ) -> c_void_p:
+        if not self.streaming_available:
+            raise RuntimeError("libdsre_audio.so does not expose streaming encoder API")
+        handle = c_void_p()
+        ret = self.lib.dsre_encoder_open(
+            os.fsencode(original_path or ""),
+            os.fsencode(output_path),
+            str(fmt).upper().encode("utf-8"),
+            int(sr),
+            int(channels),
+            byref(handle),
+        )
+        if ret != 0:
+            raise RuntimeError(f"dsre_encoder_open failed: {ret}: {self.last_error()}")
+        return handle
+
+    def encoder_write(self, handle: c_void_p, pcm_interleaved: np.ndarray) -> None:
+        if not self.streaming_available:
+            raise RuntimeError("libdsre_audio.so does not expose streaming encoder API")
+        pcm = np.ascontiguousarray(pcm_interleaved, dtype=np.float32)
+        if pcm.ndim != 2:
+            raise ValueError("encoder_write expects shape=(samples, channels)")
+        samples = int(pcm.shape[0])
+        if samples <= 0:
+            return
+        ret = self.lib.dsre_encoder_write_f32(
+            handle,
+            pcm.ctypes.data_as(POINTER(c_float)),
+            samples,
+        )
+        if ret != 0:
+            raise RuntimeError(f"dsre_encoder_write_f32 failed: {ret}: {self.last_error()}")
+
+    def encoder_close(self, handle: Optional[c_void_p]) -> None:
+        if handle and self.streaming_available:
+            ret = self.lib.dsre_encoder_close(handle)
+            if ret != 0:
+                raise RuntimeError(f"dsre_encoder_close failed: {ret}: {self.last_error()}")
+
+    def encoder_abort(self, handle: Optional[c_void_p]) -> None:
+        if handle and self.streaming_available:
+            self.lib.dsre_encoder_abort(handle)
 
 
 _NATIVE_AUDIO: Optional[DSRENativeAudio] = None
@@ -1059,9 +1249,12 @@ class DSREProcessor:
                 "memory",
                 "out of memory",
                 "allocation",
+                "cannot allocate",
+                "malloc",
+                "std::bad_alloc",
             )
         ):
-            return "memory"
+            return "fatal"
 
         if any(
             keyword in error_str
@@ -1087,6 +1280,229 @@ class DSREProcessor:
 
         return "retry"
 
+    def process_audio_streaming(
+        self,
+        in_path: str,
+        out_path: str,
+        target_sr: int,
+        fmt: str,
+        chunk_seconds: float = 6.0,
+        overlap_seconds: float = 0.08,
+    ) -> str:
+        """Decode/process/encode using overlap + valid-region streaming.
+
+        Each processing window contains:
+            left context overlap + valid core + right context overlap
+
+        Only the valid core is written. This avoids crossfading two independently
+        processed boundary regions and instead uses overlap purely as DSP context.
+        """
+        native = get_native_audio()
+        if not getattr(native, "streaming_available", False):
+            raise RuntimeError("libdsre_audio.so streaming API is not available")
+
+        dec_handle = None
+        enc_handle = None
+        tmp_out = out_path + ".tmp"
+        final_written = False
+
+        if os.path.exists(tmp_out):
+            try:
+                os.remove(tmp_out)
+            except OSError:
+                pass
+
+        def write_ch_first_to_encoder(handle: c_void_p, pcm_ch_first: np.ndarray) -> None:
+            pcm_ch_first = ensure_ch_first(sanitize_audio(pcm_ch_first))
+            if pcm_ch_first.size == 0 or pcm_ch_first.shape[1] <= 0:
+                return
+            pcm_interleaved = np.ascontiguousarray(
+                ensure_sf_shape(pcm_ch_first),
+                dtype=np.float32,
+            )
+            native.encoder_write(handle, pcm_interleaved)
+
+        def process_window(window_ch_first: np.ndarray) -> np.ndarray:
+            window_ch_first = ensure_ch_first(sanitize_audio(window_ch_first)).astype(np.float32, copy=False)
+            processed_window = enhanced_audio_algorithm(
+                window_ch_first,
+                sr,
+                enhancement_strength=float(self.params["decay"]),
+                harmonic_intensity=float(self.params["m"]) / 16.0,
+                stereo_width=float(self.params["stereo_width"]),
+                dynamic_enhancement=float(self.params["dynamic"]),
+                progress_cb=None,
+                abort_cb=self.abort_cb,
+            )
+            return ensure_ch_first(sanitize_audio(processed_window, fallback=window_ch_first)).astype(np.float32, copy=False)
+
+        try:
+            dec_handle, sr, channels = native.decoder_open(
+                in_path,
+                target_sr=target_sr,
+                preferred_chunk_samples=max(1024, int(target_sr * chunk_seconds)),
+            )
+            if channels <= 0 or sr <= 0:
+                raise RuntimeError(f"Invalid streaming decoder info: sr={sr}, channels={channels}")
+
+            enc_handle = native.encoder_open(
+                original_path=in_path,
+                output_path=tmp_out,
+                fmt=fmt,
+                sr=sr,
+                channels=channels,
+            )
+
+            core_samples = max(1024, int(sr * chunk_seconds))
+            overlap_samples = int(sr * overlap_seconds)
+            overlap_samples = int(np.clip(overlap_samples, 0, max(0, core_samples // 4)))
+
+            # Decoder reads in core-sized blocks; raw_buffer stores channels-first PCM.
+            decode_buffer = np.empty((core_samples, channels), dtype=np.float32)
+            raw_buffer = np.empty((channels, 0), dtype=np.float32)
+            have_left_context = False
+            eof = False
+            window_index = 0
+            total_in_rms = 0.0
+            total_out_rms = 0.0
+            rms_count = 0
+
+            self.step_progress(3, "stream open")
+            self.logs(
+                f"Streaming valid-region overlap: {overlap_samples} samples "
+                f"({(overlap_samples / sr) if sr else 0:.3f}s), core={core_samples} samples"
+            )
+
+            while True:
+                if self.abort_cb():
+                    raise RuntimeError("Processing aborted")
+
+                # Decide how much context we need before processing the next window.
+                if overlap_samples <= 0:
+                    needed = core_samples
+                elif have_left_context:
+                    needed = overlap_samples + core_samples + overlap_samples
+                else:
+                    needed = core_samples + overlap_samples
+
+                # Fill raw_buffer until we have enough context, or until EOF.
+                while not eof and raw_buffer.shape[1] < needed:
+                    samples_read, eof_now = native.decoder_read(
+                        dec_handle,
+                        decode_buffer,
+                        core_samples,
+                    )
+                    if samples_read > 0:
+                        chunk = np.ascontiguousarray(
+                            decode_buffer[:samples_read, :].T,
+                            dtype=np.float32,
+                        )
+                        raw_buffer = np.ascontiguousarray(
+                            np.concatenate((raw_buffer, chunk), axis=1),
+                            dtype=np.float32,
+                        )
+                        chunk = None
+                    if eof_now:
+                        eof = True
+                        break
+
+                if raw_buffer.shape[1] == 0 and eof:
+                    break
+
+                # If EOF arrived before a full contextual window, process remaining samples.
+                if eof and raw_buffer.shape[1] < needed:
+                    window_index += 1
+                    processed = process_window(raw_buffer)
+                    if overlap_samples > 0 and have_left_context:
+                        valid = processed[:, min(overlap_samples, processed.shape[1]):]
+                    else:
+                        valid = processed
+                    write_ch_first_to_encoder(enc_handle, valid)
+
+                    try:
+                        total_in_rms += audio_rms(raw_buffer)
+                        total_out_rms += audio_rms(valid)
+                        rms_count += 1
+                    except Exception:
+                        pass
+
+                    raw_buffer = np.empty((channels, 0), dtype=np.float32)
+                    processed = None
+                    valid = None
+                    force_release_memory()
+                    break
+
+                window_index += 1
+
+                if overlap_samples <= 0:
+                    window_len = min(core_samples, raw_buffer.shape[1])
+                    window = raw_buffer[:, :window_len]
+                    processed = process_window(window)
+                    write_ch_first_to_encoder(enc_handle, processed)
+                    raw_buffer = np.ascontiguousarray(raw_buffer[:, window_len:], dtype=np.float32)
+                    valid = processed
+                elif have_left_context:
+                    window_len = overlap_samples + core_samples + overlap_samples
+                    window = raw_buffer[:, :window_len]
+                    processed = process_window(window)
+                    valid_start = min(overlap_samples, processed.shape[1])
+                    valid_end = min(valid_start + core_samples, processed.shape[1])
+                    valid = processed[:, valid_start:valid_end]
+                    write_ch_first_to_encoder(enc_handle, valid)
+                    # Drop left context + valid core; keep right overlap as next left context.
+                    drop = min(overlap_samples + core_samples, raw_buffer.shape[1])
+                    raw_buffer = np.ascontiguousarray(raw_buffer[:, drop:], dtype=np.float32)
+                else:
+                    window_len = core_samples + overlap_samples
+                    window = raw_buffer[:, :window_len]
+                    processed = process_window(window)
+                    valid_end = min(core_samples, processed.shape[1])
+                    valid = processed[:, :valid_end]
+                    write_ch_first_to_encoder(enc_handle, valid)
+                    # Drop first valid core; keep right overlap as next left context.
+                    drop = min(core_samples, raw_buffer.shape[1])
+                    raw_buffer = np.ascontiguousarray(raw_buffer[:, drop:], dtype=np.float32)
+                    have_left_context = overlap_samples > 0 and raw_buffer.shape[1] > 0
+
+                try:
+                    total_in_rms += audio_rms(window)
+                    total_out_rms += audio_rms(valid)
+                    rms_count += 1
+                except Exception:
+                    pass
+
+                self.step_progress(min(94, 8 + (window_index % 86)), f"window {window_index}")
+
+                window = None
+                processed = None
+                valid = None
+                force_release_memory()
+
+            self.step_progress(96, "finalizing")
+            native.encoder_close(enc_handle)
+            enc_handle = None
+            os.replace(tmp_out, out_path)
+            final_written = True
+
+            if rms_count > 0:
+                self.logs(
+                    f"Streaming RMS avg: input={total_in_rms / rms_count:.6f}, "
+                    f"output={total_out_rms / rms_count:.6f}"
+                )
+            return out_path
+
+        finally:
+            if dec_handle is not None:
+                native.decoder_close(dec_handle)
+            if enc_handle is not None:
+                native.encoder_abort(enc_handle)
+            if not final_written and os.path.exists(tmp_out):
+                try:
+                    os.remove(tmp_out)
+                except OSError:
+                    pass
+            force_release_memory()
+
     def run(self):
         total = len(self.files)
         done = 0
@@ -1098,8 +1514,12 @@ class DSREProcessor:
 
         self.file_progress(done, total, "")
         self.stats(dict(self.processing_stats))
-
         os.makedirs(self.output_dir, exist_ok=True)
+
+        native = get_native_audio()
+        if not getattr(native, "streaming_available", False):
+            self.logs("[red]Streaming API が libdsre_audio.so に見つかりません。native 側を再ビルドしてください。[/]")
+            return
 
         for idx, in_path in enumerate(self.files, start=1):
             if self.abort_cb():
@@ -1108,17 +1528,15 @@ class DSREProcessor:
 
             fname = os.path.basename(in_path)
             file_size_mb = self.get_file_size_mb(in_path)
-
             self.file_progress(idx, total, fname)
             self.step_progress(0, fname)
-
             self.logs(
-                f"[cyan]Processing[/] {fname} "
+                f"[cyan]Processing(streaming)[/] {fname} "
                 f"({file_size_mb:.1f} MB, {idx}/{total})"
             )
 
             retry_count = 0
-            max_retries = 3
+            max_retries = 1
 
             while retry_count <= max_retries:
                 if self.abort_cb():
@@ -1126,150 +1544,68 @@ class DSREProcessor:
 
                 try:
                     target_sr = int(self.params["target_sr"])
+                    base, _ = os.path.splitext(os.path.basename(in_path))
+                    ext_map = {"ALAC": "m4a", "FLAC": "flac", "MP3": "mp3"}
+                    out_ext = ext_map.get(self.params["format"], "m4a")
+                    out_path = os.path.join(self.output_dir, f"{base}_enhanced.{out_ext}")
 
-                    try:
-                        info = ffprobe_audio_info(in_path)
-                        self.logs(
-                            "[dim]"
-                            f"Source info: codec={info.get('codec_name', '')}, "
-                            f"sr={info.get('sample_rate', 0)}Hz, "
-                            f"ch={info.get('channels', 0)}, "
-                            f"dur={info.get('duration', 0):.2f}s"
-                            "[/]"
-                        )
-                    except Exception as probe_error:
-                        self.logs(f"[yellow]FFprobe warning:[/] {probe_error}")
-
-                    self.logs(f"Loading audio via FFmpeg: {fname}")
-
-                    y, sr = load_audio_ffmpeg(in_path, target_sr=target_sr)
-
-                    if y.ndim == 1:
-                        y = y[np.newaxis, :]
-
-                    if y is None or y.size == 0:
-                        raise ValueError("Empty audio data loaded")
-
-                    if audio_peak(y) < 1e-10:
-                        raise RuntimeError(
-                            "Input audio file appears to be silent or corrupted"
-                        )
-
-                    self.logs(f"Loaded successfully: shape={y.shape}, sr={sr}Hz")
                     self.logs(
-                        f"Input range: {np.min(y):.4f} to {np.max(y):.4f}, "
-                        f"RMS={audio_rms(y):.6f}"
-                    )
-                    self.logs(
-                        "Enhancement parameters: "
+                        "Streaming enhancement parameters: "
                         f"strength={self.params['decay']}, "
                         f"harmonics={self.params['m']}, "
                         f"stereo_width={self.params['stereo_width']}, "
-                        f"dynamic={self.params['dynamic']}"
+                        f"dynamic={self.params['dynamic']}, "
+                        f"target_sr={target_sr}"
                     )
 
-                    def step_cb(cur, desc):
-                        self.step_progress(int(cur), fname)
-                        if desc:
-                            self.logs(f"[dim]{desc}[/]")
-
-                    if file_size_mb > float(self.params["chunk_threshold_mb"]):
-                        self.logs(
-                            f"Using chunked processing for large file: {fname}"
-                        )
-                        y_out = self.process_audio_chunked(y, sr)
-                    else:
-                        self.logs("Starting enhanced audio processing")
-                        y_out = enhanced_audio_algorithm(
-                            y,
-                            sr,
-                            enhancement_strength=float(self.params["decay"]),
-                            harmonic_intensity=float(self.params["m"]) / 16.0,
-                            stereo_width=float(self.params["stereo_width"]),
-                            dynamic_enhancement=float(self.params["dynamic"]),
-                            progress_cb=step_cb,
-                            abort_cb=self.abort_cb,
-                        )
-
-                    if self.abort_cb():
-                        break
-
-                    self.logs(
-                        f"Output range: {np.min(y_out):.4f} to {np.max(y_out):.4f}, "
-                        f"RMS={audio_rms(y_out):.6f}"
-                    )
-
-                    if audio_peak(y_out) < 1e-10:
-                        self.logs(
-                            "[red]Output audio is silent. Using original audio instead.[/]"
-                        )
-                        y_out = y.copy()
-
-                    if y.shape == y_out.shape:
-                        diff = np.abs(y_out - y)
-                        max_diff = float(np.max(diff))
-                        mean_diff = float(np.mean(diff))
-                        rms_original = audio_rms(y)
-                        rms_enhanced = audio_rms(y_out)
-                        enhancement_ratio = rms_enhanced / (rms_original + 1e-12)
-
-                        self.logs("[bold]Enhancement Results:[/]")
-                        self.logs(f"  Max difference: {max_diff:.6f}")
-                        self.logs(f"  Mean difference: {mean_diff:.6f}")
-                        self.logs(f"  RMS enhancement ratio: {enhancement_ratio:.3f}")
-
-                        if max_diff < 0.001:
-                            self.logs("[yellow]WARNING: Very small enhancement detected[/]")
-                        else:
-                            self.logs("[green]SUCCESS: Enhancement applied[/]")
-
-                    base, _ = os.path.splitext(fname)
-
-                    ext_map = {
-                        "ALAC": "m4a",
-                        "FLAC": "flac",
-                        "MP3": "mp3",
-                    }
-
-                    out_ext = ext_map.get(self.params["format"], "m4a")
-
-                    out_path = os.path.join(
-                        self.output_dir,
-                        f"{base}_enhanced.{out_ext}",
-                    )
-
-                    out_path = save_with_metadata(
-                        in_path,
-                        y_out,
-                        sr,
-                        out_path,
+                    out_path = self.process_audio_streaming(
+                        in_path=in_path,
+                        out_path=out_path,
+                        target_sr=target_sr,
                         fmt=self.params["format"],
                     )
 
                     self.logs(f"[green]Saved:[/] {out_path}")
-
                     self.processing_stats["processed_files"] += 1
                     self.processing_stats["processed_size_mb"] += file_size_mb
-
                     break
 
                 except Exception as e:
                     err = "".join(
                         traceback.format_exception_only(type(e), e)
                     ).strip()
-
                     retry_count += 1
                     error_type = self.categorize_error(e)
+
+                    write_fflog(
+                        "DSRE streaming processing exception",
+                        err,
+                        e,
+                        extra={
+                            "file": in_path,
+                            "filename": fname,
+                            "retry_count": retry_count,
+                            "max_retries": max_retries,
+                            "error_type": error_type,
+                            "params": self.params,
+                            "output_dir": self.output_dir,
+                        },
+                    )
+                    force_release_memory()
+
+                    if self.abort_cb():
+                        self.logs("[yellow]Processing aborted[/]")
+                        break
 
                     if retry_count <= max_retries and error_type != "fatal":
                         self.logs(
                             f"[yellow][Retry {retry_count}/{max_retries}][/]"
                             f" {fname}: {err}"
                         )
-                        time.sleep(2 if error_type in ("io", "ffmpeg") else 1)
+                        time.sleep(1)
                     else:
                         self.logs(f"[red][Error][/] {fname}: {err}")
-                        self.logs(traceback.format_exc())
+                        self.logs(f"詳細は {FFLOG_FILE} を確認してください")
                         self.processing_stats["failed_files"] += 1
                         break
 
@@ -1277,6 +1613,7 @@ class DSREProcessor:
             self.file_progress(done, total, fname)
             self.step_progress(100, fname)
             self.stats(dict(self.processing_stats))
+            force_release_memory()
 
         self.logs("[bold green]Processing finished[/]")
 
@@ -1509,7 +1846,7 @@ class DSREKivyRoot(BoxLayout):
         param_card.add_widget(SectionTitle(text="設定"))
         self.input_m = self._param(param_card, "Harmonic 1-32", "12")
         self.input_decay = self._param(param_card, "Strength 0.1-1.0", "0.35")
-        self.input_sr = self._param(param_card, "Sample Rate", "96000")
+        self.input_sr = self._param(param_card, "Sample Rate", "48000")
         param_card.add_widget(SmallLabel(text="Format"))
         self.input_format = Spinner(text="ALAC", values=("ALAC", "FLAC", "MP3"), size_hint_y=None, height=dp(40), background_normal="", background_color=MATERIAL["surface_alt"], color=MATERIAL["text"])
         font = get_ui_font()
@@ -1644,7 +1981,7 @@ class DSREKivyRoot(BoxLayout):
         return {
             "m": int(np.clip(int(self.input_m.text.strip() or "12"), 1, 32)),
             "decay": float(np.clip(float(self.input_decay.text.strip() or "0.35"), 0.1, 1.0)),
-            "target_sr": int(np.clip(int(self.input_sr.text.strip() or "96000"), 44100, 192000)),
+            "target_sr": int(np.clip(int(self.input_sr.text.strip() or "48000"), 44100, 192000)),
             "format": fmt,
             "stereo_width": float(np.clip(float(self.input_stereo_width.text.strip() or "1.15"), 1.0, 1.8)),
             "dynamic": float(np.clip(float(self.input_dynamic.text.strip() or "1.12"), 1.0, 1.5)),
@@ -1727,6 +2064,7 @@ class DSREKivyRoot(BoxLayout):
         )
 
     def on_processing_finished(self):
+        force_release_memory()
         self.processing = False
         self.cancel_requested = False
         self.file_bar.value = 100
@@ -1780,7 +2118,7 @@ class DSREKivyRoot(BoxLayout):
                 config = json.load(f)
             self.input_m.text = str(config.get("m", "12"))
             self.input_decay.text = str(config.get("decay", "0.35"))
-            self.input_sr.text = str(config.get("target_sr", "96000"))
+            self.input_sr.text = str(config.get("target_sr", "48000"))
             self.input_format.text = str(config.get("format", "ALAC"))
             self.input_stereo_width.text = str(config.get("stereo_width", "1.15"))
             self.input_dynamic.text = str(config.get("dynamic", "1.12"))
