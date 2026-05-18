@@ -47,7 +47,9 @@
 #include <libavutil/mem.h>
 #include <libavutil/opt.h>
 #include <libavutil/samplefmt.h>
+#include <libavutil/imgutils.h>
 #include <libswresample/swresample.h>
+#include <libswscale/swscale.h>
 
 #if defined(_WIN32)
 #define DSRE_EXPORT __declspec(dllexport)
@@ -166,6 +168,266 @@ static int dsre_cover_codec_allowed_for_output(AVFormatContext* out_fmt, enum AV
     return codec_id == AV_CODEC_ID_MJPEG;
 }
 
+static int dsre_attach_mjpeg_packet_to_output(
+    AVFormatContext* out_fmt,
+    AVPacket* jpg_pkt,
+    int width,
+    int height
+) {
+    AVStream* out_stream;
+    int ret;
+
+    if (!out_fmt || !jpg_pkt || !jpg_pkt->data || jpg_pkt->size <= 0 || width <= 0 || height <= 0) {
+        return DSRE_ERR_ARG;
+    }
+
+    out_stream = avformat_new_stream(out_fmt, NULL);
+    if (!out_stream) {
+        return DSRE_ERR_ALLOC;
+    }
+
+    out_stream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+    out_stream->codecpar->codec_id = AV_CODEC_ID_MJPEG;
+    out_stream->codecpar->format = AV_PIX_FMT_YUVJ420P;
+    out_stream->codecpar->width = width;
+    out_stream->codecpar->height = height;
+    out_stream->codecpar->codec_tag = 0;
+    out_stream->time_base = (AVRational){1, 90000};
+    out_stream->disposition |= AV_DISPOSITION_ATTACHED_PIC;
+
+    ret = av_packet_ref(&out_stream->attached_pic, jpg_pkt);
+    if (ret < 0) {
+        out_stream->codecpar->codec_type = AVMEDIA_TYPE_UNKNOWN;
+        return ret;
+    }
+
+    out_stream->attached_pic.stream_index = out_stream->index;
+    out_stream->attached_pic.pts = 0;
+    out_stream->attached_pic.dts = 0;
+    out_stream->attached_pic.duration = 0;
+    out_stream->attached_pic.flags |= AV_PKT_FLAG_KEY;
+    return DSRE_OK;
+}
+
+static int dsre_attach_cover_direct_if_mjpeg(
+    AVFormatContext* out_fmt,
+    AVStream* in_stream
+) {
+    if (!in_stream || !in_stream->codecpar) {
+        return DSRE_ERR_ARG;
+    }
+    if (in_stream->codecpar->codec_id != AV_CODEC_ID_MJPEG) {
+        return DSRE_ERR_UNSUPPORTED;
+    }
+    return dsre_attach_mjpeg_packet_to_output(
+        out_fmt,
+        &in_stream->attached_pic,
+        in_stream->codecpar->width,
+        in_stream->codecpar->height
+    );
+}
+
+static int dsre_transcode_cover_to_mjpeg_and_attach(
+    AVFormatContext* out_fmt,
+    AVStream* in_stream
+) {
+    int ret = DSRE_OK;
+    int dst_w = 0;
+    int dst_h = 0;
+    const int max_side = 1500;
+
+    const AVCodec* decoder = NULL;
+    AVCodecContext* dec_ctx = NULL;
+    AVPacket* in_pkt = NULL;
+    AVFrame* decoded = NULL;
+
+    struct SwsContext* sws = NULL;
+    AVFrame* yuv = NULL;
+    enum AVPixelFormat dst_pix_fmt = AV_PIX_FMT_YUVJ420P;
+
+    const AVCodec* encoder = NULL;
+    AVCodecContext* enc_ctx = NULL;
+    AVPacket* jpg_pkt = NULL;
+
+    if (!out_fmt || !in_stream || !in_stream->codecpar ||
+        in_stream->attached_pic.size <= 0 || !in_stream->attached_pic.data) {
+        return DSRE_ERR_ARG;
+    }
+
+    decoder = avcodec_find_decoder(in_stream->codecpar->codec_id);
+    if (!decoder) {
+        return DSRE_ERR_UNSUPPORTED;
+    }
+
+    dec_ctx = avcodec_alloc_context3(decoder);
+    if (!dec_ctx) {
+        ret = DSRE_ERR_ALLOC;
+        goto cleanup;
+    }
+
+    ret = avcodec_parameters_to_context(dec_ctx, in_stream->codecpar);
+    if (ret < 0) {
+        ret = DSRE_ERR_CODEC;
+        goto cleanup;
+    }
+
+    ret = avcodec_open2(dec_ctx, decoder, NULL);
+    if (ret < 0) {
+        ret = DSRE_ERR_CODEC;
+        goto cleanup;
+    }
+
+    in_pkt = av_packet_alloc();
+    decoded = av_frame_alloc();
+    if (!in_pkt || !decoded) {
+        ret = DSRE_ERR_ALLOC;
+        goto cleanup;
+    }
+
+    ret = av_packet_ref(in_pkt, &in_stream->attached_pic);
+    if (ret < 0) {
+        ret = DSRE_ERR_ALLOC;
+        goto cleanup;
+    }
+
+    ret = avcodec_send_packet(dec_ctx, in_pkt);
+    if (ret < 0) {
+        ret = DSRE_ERR_CODEC;
+        goto cleanup;
+    }
+
+    ret = avcodec_receive_frame(dec_ctx, decoded);
+    if (ret < 0) {
+        ret = DSRE_ERR_CODEC;
+        goto cleanup;
+    }
+
+    if (decoded->width <= 0 || decoded->height <= 0 || decoded->format == AV_PIX_FMT_NONE) {
+        ret = DSRE_ERR_UNSUPPORTED;
+        goto cleanup;
+    }
+
+    dst_w = decoded->width;
+    dst_h = decoded->height;
+    if (dst_w > max_side || dst_h > max_side) {
+        if (dst_w >= dst_h) {
+            dst_h = (int)((int64_t)dst_h * max_side / dst_w);
+            dst_w = max_side;
+        } else {
+            dst_w = (int)((int64_t)dst_w * max_side / dst_h);
+            dst_h = max_side;
+        }
+        if (dst_w <= 0) dst_w = 1;
+        if (dst_h <= 0) dst_h = 1;
+    }
+
+    yuv = av_frame_alloc();
+    if (!yuv) {
+        ret = DSRE_ERR_ALLOC;
+        goto cleanup;
+    }
+    yuv->format = dst_pix_fmt;
+    yuv->width = dst_w;
+    yuv->height = dst_h;
+
+    ret = av_frame_get_buffer(yuv, 32);
+    if (ret < 0) {
+        ret = DSRE_ERR_ALLOC;
+        goto cleanup;
+    }
+
+    sws = sws_getContext(
+        decoded->width,
+        decoded->height,
+        (enum AVPixelFormat)decoded->format,
+        dst_w,
+        dst_h,
+        dst_pix_fmt,
+        SWS_BILINEAR,
+        NULL,
+        NULL,
+        NULL
+    );
+    if (!sws) {
+        ret = DSRE_ERR_RESAMPLE;
+        goto cleanup;
+    }
+
+    ret = sws_scale(
+        sws,
+        (const uint8_t* const*)decoded->data,
+        decoded->linesize,
+        0,
+        decoded->height,
+        yuv->data,
+        yuv->linesize
+    );
+    if (ret <= 0) {
+        ret = DSRE_ERR_RESAMPLE;
+        goto cleanup;
+    }
+
+    encoder = avcodec_find_encoder(AV_CODEC_ID_MJPEG);
+    if (!encoder) {
+        ret = DSRE_ERR_UNSUPPORTED;
+        goto cleanup;
+    }
+
+    enc_ctx = avcodec_alloc_context3(encoder);
+    if (!enc_ctx) {
+        ret = DSRE_ERR_ALLOC;
+        goto cleanup;
+    }
+    enc_ctx->codec_type = AVMEDIA_TYPE_VIDEO;
+    enc_ctx->codec_id = AV_CODEC_ID_MJPEG;
+    enc_ctx->width = dst_w;
+    enc_ctx->height = dst_h;
+    enc_ctx->pix_fmt = dst_pix_fmt;
+    enc_ctx->time_base = (AVRational){1, 90000};
+
+    ret = avcodec_open2(enc_ctx, encoder, NULL);
+    if (ret < 0) {
+        ret = DSRE_ERR_CODEC;
+        goto cleanup;
+    }
+
+    jpg_pkt = av_packet_alloc();
+    if (!jpg_pkt) {
+        ret = DSRE_ERR_ALLOC;
+        goto cleanup;
+    }
+
+    yuv->pts = 0;
+    ret = avcodec_send_frame(enc_ctx, yuv);
+    if (ret < 0) {
+        ret = DSRE_ERR_CODEC;
+        goto cleanup;
+    }
+
+    ret = avcodec_receive_packet(enc_ctx, jpg_pkt);
+    if (ret < 0) {
+        ret = DSRE_ERR_CODEC;
+        goto cleanup;
+    }
+
+    ret = dsre_attach_mjpeg_packet_to_output(out_fmt, jpg_pkt, dst_w, dst_h);
+    if (ret != DSRE_OK) {
+        goto cleanup;
+    }
+
+    ret = DSRE_OK;
+
+cleanup:
+    if (jpg_pkt) av_packet_free(&jpg_pkt);
+    if (enc_ctx) avcodec_free_context(&enc_ctx);
+    if (yuv) av_frame_free(&yuv);
+    if (sws) sws_freeContext(sws);
+    if (decoded) av_frame_free(&decoded);
+    if (in_pkt) av_packet_free(&in_pkt);
+    if (dec_ctx) avcodec_free_context(&dec_ctx);
+    return ret;
+}
+
 static int dsre_copy_metadata_and_cover_from_original(
     AVFormatContext* out_fmt,
     const char* original_path,
@@ -176,12 +438,8 @@ static int dsre_copy_metadata_and_cover_from_original(
     int ret;
     unsigned int i;
 
-    if (out_cover_pkt) {
-        *out_cover_pkt = NULL;
-    }
-    if (out_cover_stream_index) {
-        *out_cover_stream_index = -1;
-    }
+    if (out_cover_pkt) *out_cover_pkt = NULL;
+    if (out_cover_stream_index) *out_cover_stream_index = -1;
 
     if (!out_fmt || !original_path || original_path[0] == '\0') {
         return DSRE_OK;
@@ -197,78 +455,26 @@ static int dsre_copy_metadata_and_cover_from_original(
         av_dict_copy(&out_fmt->metadata, in_fmt->metadata, 0);
     }
 
-    if (!out_cover_pkt || !out_cover_stream_index) {
-        avformat_close_input(&in_fmt);
-        return DSRE_OK;
-    }
-
     for (i = 0; i < in_fmt->nb_streams; ++i) {
         AVStream* in_stream = in_fmt->streams[i];
-        AVStream* out_stream;
 
-        if (!in_stream || !in_stream->codecpar) {
-            continue;
+        if (!in_stream || !in_stream->codecpar) continue;
+        if (!(in_stream->disposition & AV_DISPOSITION_ATTACHED_PIC)) continue;
+        if (in_stream->attached_pic.size <= 0 || !in_stream->attached_pic.data) continue;
+        if (in_stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) continue;
+
+        if (in_stream->codecpar->codec_id == AV_CODEC_ID_MJPEG) {
+            ret = dsre_attach_cover_direct_if_mjpeg(out_fmt, in_stream);
+        } else {
+            ret = dsre_transcode_cover_to_mjpeg_and_attach(out_fmt, in_stream);
         }
 
-        if (!(in_stream->disposition & AV_DISPOSITION_ATTACHED_PIC)) {
-            continue;
-        }
-
-        if (in_stream->attached_pic.size <= 0 || !in_stream->attached_pic.data) {
-            continue;
-        }
-
-        if (in_stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) {
-            continue;
-        }
-
-        if (in_stream->codecpar->width <= 0 || in_stream->codecpar->height <= 0) {
-            continue;
-        }
-
-        if (!dsre_cover_codec_allowed_for_output(out_fmt, in_stream->codecpar->codec_id)) {
-            /*
-             * Unsupported cover format.
-             * Skip it instead of making avformat_write_header fail.
-             */
-            continue;
-        }
-
-        out_stream = avformat_new_stream(out_fmt, NULL);
-        if (!out_stream) {
+        /* Cover art is best-effort. Never fail the whole audio encode because of it. */
+        if (ret == DSRE_OK) {
+            if (out_cover_pkt) *out_cover_pkt = NULL;
+            if (out_cover_stream_index) *out_cover_stream_index = 0;
             break;
         }
-
-        ret = avcodec_parameters_copy(out_stream->codecpar, in_stream->codecpar);
-        if (ret < 0) {
-            out_stream->codecpar->codec_type = AVMEDIA_TYPE_UNKNOWN;
-            continue;
-        }
-
-        out_stream->codecpar->codec_tag = 0;
-        out_stream->time_base = (AVRational){1, 90000};
-        out_stream->disposition |= AV_DISPOSITION_ATTACHED_PIC;
-
-        /*
-         * Important:
-         * Attached pictures should be stored in AVStream.attached_pic before
-         * avformat_write_header(). Do not write them later as normal packets.
-         */
-        ret = av_packet_ref(&out_stream->attached_pic, &in_stream->attached_pic);
-        if (ret < 0) {
-            out_stream->codecpar->codec_type = AVMEDIA_TYPE_UNKNOWN;
-            break;
-        }
-
-        out_stream->attached_pic.stream_index = out_stream->index;
-        out_stream->attached_pic.pts = 0;
-        out_stream->attached_pic.dts = 0;
-        out_stream->attached_pic.duration = 0;
-        out_stream->attached_pic.flags |= AV_PKT_FLAG_KEY;
-
-        *out_cover_pkt = NULL;
-        *out_cover_stream_index = out_stream->index;
-        break;
     }
 
     avformat_close_input(&in_fmt);
