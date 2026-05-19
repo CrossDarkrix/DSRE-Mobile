@@ -36,6 +36,65 @@ os.makedirs(DSRE_DOCUMENT_DIR, exist_ok=True)
 CONFIG_FILE = os.path.join(DSRE_DOCUMENT_DIR, "dsre_kivy_config.json")
 FFLOG_FILE = os.path.join(DSRE_DOCUMENT_DIR, "fflog.txt")
 
+DEFAULT_AUDIO_PRESETS: Dict[str, Dict[str, Any]] = {
+    "基準: 明瞭バランス 15/0.47": {
+        "m": "15",
+        "decay": "0.47",
+        "target_sr": "48000",
+        "format": "ALAC",
+        "stereo_width": "0.98",
+        "dynamic": "1.11",
+        "dsp_context": "0.04",
+    },
+    "狭め明瞭: 15/0.48": {
+        "m": "15",
+        "decay": "0.48",
+        "target_sr": "48000",
+        "format": "ALAC",
+        "stereo_width": "0.78",
+        "dynamic": "1.03",
+        "dsp_context": "0.02",
+    },
+    "自然寄り: 14/0.45": {
+        "m": "14",
+        "decay": "0.45",
+        "target_sr": "48000",
+        "format": "ALAC",
+        "stereo_width": "0.98",
+        "dynamic": "1.10",
+        "dsp_context": "0.04",
+    },
+}
+PRESET_NAME_ALIASES: Dict[str, str] = {
+    "Reference 15 / 0.47": "基準: 明瞭バランス 15/0.47",
+    "Clear Narrow 15 / 0.48": "狭め明瞭: 15/0.48",
+    "Natural 14 / 0.45": "自然寄り: 14/0.45",
+}
+DEFAULT_PRESET_NAME = "基準: 明瞭バランス 15/0.47"
+IMMUTABLE_PRESET_NAMES = set(DEFAULT_AUDIO_PRESETS.keys())
+PRESET_DISPLAY_ORDER: List[str] = [
+    DEFAULT_PRESET_NAME,
+    "狭め明瞭: 15/0.48" if "狭め明瞭: 15/0.48" in DEFAULT_AUDIO_PRESETS else "Clear Narrow 15 / 0.48",
+    "自然寄り: 14/0.45" if "自然寄り: 14/0.45" in DEFAULT_AUDIO_PRESETS else "Natural 14 / 0.45",
+]
+
+
+def normalize_preset_values(values: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    values = values or {}
+    base = dict(DEFAULT_AUDIO_PRESETS[DEFAULT_PRESET_NAME])
+    for key in ("m", "decay", "target_sr", "format", "stereo_width", "dynamic", "dsp_context"):
+        if key in values and values[key] is not None:
+            base[key] = str(values[key])
+    base["format"] = base.get("format", "ALAC").upper()
+    if base["format"] not in ("ALAC", "FLAC", "MP3"):
+        base["format"] = "ALAC"
+    return base
+
+
+def copy_default_presets() -> Dict[str, Dict[str, str]]:
+    return {name: normalize_preset_values(values) for name, values in DEFAULT_AUDIO_PRESETS.items()}
+
+
 
 def write_fflog(
     title: str,
@@ -1774,6 +1833,13 @@ class SmallLabel(MaterialLabel):
         kwargs.setdefault("height", dp(20))
         super().__init__(**kwargs)
 
+class _FileChooserListView(FileChooserListView):
+    def __init__(self, **kwargs):
+        font = get_ui_font()
+        if font:
+            self.font_name = font
+        super().__init__(**kwargs)
+
 
 class FileChooserPopup(ModalView):
     def __init__(self, select_callback, choose_dir=False, **kwargs):
@@ -1783,7 +1849,10 @@ class FileChooserPopup(ModalView):
         self.auto_dismiss = False
         root = MaterialCard(orientation="vertical")
         root.add_widget(SectionTitle(text="ディレクトリを選択" if choose_dir else "音声ファイルを選択"))
-        self.chooser = FileChooserListView(path=os.getenv('EXTERNAL_STORAGE'), dirselect=choose_dir)
+        self.chooser = _FileChooserListView(path=os.getenv('EXTERNAL_STORAGE'), dirselect=choose_dir)
+        font = get_ui_font()
+        if font:
+            self.font_name = font
         if not choose_dir:
             self.chooser.filters = [lambda folder, filename: os.path.isdir(filename) or os.path.splitext(filename.lower())[1] in AUDIO_EXTENSIONS]
         root.add_widget(self.chooser)
@@ -1813,6 +1882,8 @@ class DSREKivyRoot(BoxLayout):
         self.cancel_requested = False
         self.processor_thread = None
         self.config_path = CONFIG_FILE
+        self.presets = copy_default_presets()
+        self.active_preset_name = DEFAULT_PRESET_NAME
         Window.minimum_width = 360
         Window.minimum_height = 560
         Window.clearcolor = MATERIAL["bg"]
@@ -1832,7 +1903,7 @@ class DSREKivyRoot(BoxLayout):
         header = MaterialCard(orientation="vertical", size_hint_y=None, height=dp(70), padding=dp(10))
         header.add_widget(MaterialLabel(text="DSRE Audio Enhancer", font_size="20sp", bold=True, size_hint_y=None, height=dp(30)))
         font_info = get_ui_font() or "_ja_JP.ttf not found"
-        header.add_widget(SmallLabel(text="version: 2.0.0"))
+        header.add_widget(SmallLabel(text="version: 2.0.5"))
         self.add_widget(header)
 
         scroll = ScrollView(do_scroll_x=False)
@@ -1886,6 +1957,32 @@ class DSREKivyRoot(BoxLayout):
         self.input_dynamic = self._param(param_card, "Dynamic", "1.11")
         self.input_chunk_threshold = self._param(param_card, "Chunk MB", "150")
         self.input_dsp_context = self._param(param_card, "DSP Context sec", "0.04")
+        param_card.add_widget(SmallLabel(text="Preset"))
+        self.input_preset = Spinner(
+            text=DEFAULT_PRESET_NAME,
+            values=tuple(DEFAULT_AUDIO_PRESETS.keys()),
+            size_hint_y=None,
+            height=dp(40),
+            background_normal="",
+            background_color=MATERIAL["surface_alt"],
+            color=MATERIAL["text"],
+        )
+        font = get_ui_font()
+        if font:
+            self.input_preset.font_name = font
+        param_card.add_widget(self.input_preset)
+
+        preset_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
+        apply_preset = MaterialButton(text="プリセット適用", kind="primary")
+        save_preset = MaterialButton(text="プリセット登録", kind="secondary")
+        delete_preset = MaterialButton(text="プリセット削除", kind="flat")
+        apply_preset.bind(on_release=lambda *_: self.apply_selected_preset())
+        save_preset.bind(on_release=lambda *_: self.open_save_preset_dialog())
+        delete_preset.bind(on_release=lambda *_: self.open_delete_preset_dialog())
+        preset_row.add_widget(apply_preset)
+        preset_row.add_widget(save_preset)
+        preset_row.add_widget(delete_preset)
+        param_card.add_widget(preset_row)
         param_card.add_widget(SmallLabel(text="Output Directory"))
         row_out = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
         if os.getenv('EXTERNAL_STORAGE'):
@@ -2004,6 +2101,152 @@ class DSREKivyRoot(BoxLayout):
             return
         added = self.add_directory_to_list(directory, recursive=True)
         self.write_log(f"Directory scan completed: {added} files added")
+
+    def current_audio_preset_values(self) -> Dict[str, str]:
+        return normalize_preset_values(
+            {
+                "m": self.input_m.text,
+                "decay": self.input_decay.text,
+                "target_sr": self.input_sr.text,
+                "format": self.input_format.text,
+                "stereo_width": self.input_stereo_width.text,
+                "dynamic": self.input_dynamic.text,
+                "dsp_context": self.input_dsp_context.text if hasattr(self, "input_dsp_context") else "0.04",
+            }
+        )
+
+    def apply_audio_preset_values(self, values: Dict[str, Any]):
+        preset = normalize_preset_values(values)
+        self.input_m.text = preset["m"]
+        self.input_decay.text = preset["decay"]
+        self.input_sr.text = preset["target_sr"]
+        self.input_format.text = preset["format"]
+        self.input_stereo_width.text = preset["stereo_width"]
+        self.input_dynamic.text = preset["dynamic"]
+        if hasattr(self, "input_dsp_context"):
+            self.input_dsp_context.text = preset["dsp_context"]
+
+    def refresh_preset_spinner(self):
+        if not hasattr(self, "input_preset"):
+            return
+        if not self.presets:
+            self.presets = copy_default_presets()
+
+        ordered = []
+        for name in PRESET_DISPLAY_ORDER:
+            if name in self.presets and name not in ordered:
+                ordered.append(name)
+        for name in self.presets.keys():
+            if name not in ordered:
+                ordered.append(name)
+
+        if not ordered:
+            self.presets = copy_default_presets()
+            ordered = list(DEFAULT_AUDIO_PRESETS.keys())
+
+        self.input_preset.values = tuple(ordered)
+        if getattr(self, "active_preset_name", None) in self.presets:
+            self.input_preset.text = self.active_preset_name
+        elif self.input_preset.text not in self.presets:
+            self.input_preset.text = DEFAULT_PRESET_NAME if DEFAULT_PRESET_NAME in self.presets else ordered[0]
+
+    def apply_selected_preset(self):
+        name = getattr(self, "input_preset", None).text if hasattr(self, "input_preset") else DEFAULT_PRESET_NAME
+        if name not in self.presets:
+            self.write_log(f"プリセットが見つかりません: {name}")
+            return
+        self.active_preset_name = name
+        self.apply_audio_preset_values(self.presets[name])
+        self.status_label.text = f"プリセット適用: {name}"
+        self.write_log(f"[green]プリセット適用:[/] {name}")
+
+    def open_save_preset_dialog(self):
+        try:
+            popup = ModalView(size_hint=(0.90, None), height=dp(230), auto_dismiss=True)
+            root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
+            root.add_widget(SectionTitle(text="プリセット登録"))
+            name_input = MaterialInput(text=getattr(self, "input_preset", None).text if hasattr(self, "input_preset") else "New Preset")
+            root.add_widget(SmallLabel(text="プリセット名"))
+            root.add_widget(name_input)
+            row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+            cancel = MaterialButton(text="キャンセル", kind="flat")
+            save = MaterialButton(text="登録", kind="primary")
+
+            def _save(*_):
+                name = name_input.text.strip()
+                if not name:
+                    self.write_log("プリセット名が空です")
+                    return
+                if name in IMMUTABLE_PRESET_NAMES:
+                    self.write_log("標準プリセットは上書きできません")
+                    return
+                self.presets[name] = self.current_audio_preset_values()
+                self.active_preset_name = name
+                self.refresh_preset_spinner()
+                self.input_preset.text = name
+                self.write_log(f"[green]プリセット登録:[/] {name}")
+                self.status_label.text = f"プリセット登録: {name}"
+                popup.dismiss()
+
+            cancel.bind(on_release=lambda *_: popup.dismiss())
+            save.bind(on_release=_save)
+            row.add_widget(cancel)
+            row.add_widget(save)
+            root.add_widget(row)
+            popup.add_widget(root)
+            popup.open()
+        except Exception as e:
+            self.write_log(f"プリセット登録画面を開けません: {e}")
+
+    def open_delete_preset_dialog(self):
+        try:
+            deletable = [name for name in sorted(self.presets.keys()) if name not in IMMUTABLE_PRESET_NAMES]
+            if not deletable:
+                self.write_log("削除できるユーザープリセットがありません")
+                return
+            popup = ModalView(size_hint=(0.90, None), height=dp(220), auto_dismiss=True)
+            root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
+            root.add_widget(SectionTitle(text="プリセット削除"))
+            spinner = Spinner(
+                text=deletable[0],
+                values=tuple(deletable),
+                size_hint_y=None,
+                height=dp(40),
+                background_normal="",
+                background_color=MATERIAL["surface_alt"],
+                color=MATERIAL["text"],
+            )
+            font = get_ui_font()
+            if font:
+                spinner.font_name = font
+            root.add_widget(spinner)
+            row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+            cancel = MaterialButton(text="キャンセル", kind="flat")
+            delete = MaterialButton(text="削除", kind="danger")
+
+            def _delete(*_):
+                name = spinner.text
+                if name in IMMUTABLE_PRESET_NAMES:
+                    self.write_log("標準プリセットは削除できません")
+                    return
+                if name in self.presets:
+                    del self.presets[name]
+                    if self.active_preset_name == name:
+                        self.active_preset_name = DEFAULT_PRESET_NAME
+                    self.refresh_preset_spinner()
+                    self.write_log(f"[yellow]プリセット削除:[/] {name}")
+                    self.status_label.text = f"プリセット削除: {name}"
+                popup.dismiss()
+
+            cancel.bind(on_release=lambda *_: popup.dismiss())
+            delete.bind(on_release=_delete)
+            row.add_widget(cancel)
+            row.add_widget(delete)
+            root.add_widget(row)
+            popup.add_widget(root)
+            popup.open()
+        except Exception as e:
+            self.write_log(f"プリセット削除画面を開けません: {e}")
 
     def read_params(self):
         fmt = (self.input_format.text.strip() or "ALAC").upper()
@@ -2201,7 +2444,19 @@ class DSREKivyRoot(BoxLayout):
     def save_config(self):
         try:
             os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+            active = getattr(self, "input_preset", None).text if hasattr(self, "input_preset") else getattr(self, "active_preset_name", DEFAULT_PRESET_NAME)
+            if active not in self.presets:
+                active = DEFAULT_PRESET_NAME
+            self.active_preset_name = active
+            user_presets = {
+                name: normalize_preset_values(values)
+                for name, values in self.presets.items()
+                if name not in IMMUTABLE_PRESET_NAMES
+            }
             config = {
+                "schema_version": 2,
+                "active_preset": self.active_preset_name,
+                "presets": user_presets,
                 "m": self.input_m.text,
                 "decay": self.input_decay.text,
                 "target_sr": self.input_sr.text,
@@ -2216,7 +2471,6 @@ class DSREKivyRoot(BoxLayout):
             }
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-
             self.write_log(f"[green]設定を保存しました:[/] {self.config_path}")
             self.status_label.text = "設定を保存しました"
             self.show_alert("設定保存", f"設定を書き込みました\n{self.config_path}")
@@ -2233,7 +2487,12 @@ class DSREKivyRoot(BoxLayout):
 
     def load_config(self, log=False):
         try:
+            self.presets = copy_default_presets()
+            self.active_preset_name = DEFAULT_PRESET_NAME
+
             if not os.path.exists(self.config_path):
+                self.apply_audio_preset_values(DEFAULT_AUDIO_PRESETS[DEFAULT_PRESET_NAME])
+                self.refresh_preset_spinner()
                 if log:
                     self.write_log(f"設定ファイルが見つかりません: {self.config_path}")
                     self.status_label.text = "設定ファイルが見つかりません"
@@ -2243,15 +2502,35 @@ class DSREKivyRoot(BoxLayout):
             with open(self.config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
 
-            self.input_m.text = str(config.get("m", "15"))
-            self.input_decay.text = str(config.get("decay", "0.47"))
-            self.input_sr.text = str(config.get("target_sr", "48000"))
-            self.input_format.text = str(config.get("format", "ALAC"))
-            self.input_stereo_width.text = str(config.get("stereo_width", "0.98"))
-            self.input_dynamic.text = str(config.get("dynamic", "1.11"))
+            saved_presets = config.get("presets", {})
+            if isinstance(saved_presets, dict):
+                for name, values in saved_presets.items():
+                    if not name or name in IMMUTABLE_PRESET_NAMES or name in PRESET_NAME_ALIASES:
+                        continue
+                    if isinstance(values, dict):
+                        self.presets[str(name)] = normalize_preset_values(values)
+
+            self.active_preset_name = PRESET_NAME_ALIASES.get(str(config.get("active_preset", DEFAULT_PRESET_NAME)), str(config.get("active_preset", DEFAULT_PRESET_NAME)))
+            if self.active_preset_name not in self.presets:
+                self.active_preset_name = DEFAULT_PRESET_NAME
+
+            # Preserve the last edited flat values when present. This keeps backward compatibility
+            # with the previous single-setting config file.
+            current_values = normalize_preset_values(
+                {
+                    "m": config.get("m", DEFAULT_AUDIO_PRESETS[DEFAULT_PRESET_NAME]["m"]),
+                    "decay": config.get("decay", DEFAULT_AUDIO_PRESETS[DEFAULT_PRESET_NAME]["decay"]),
+                    "target_sr": config.get("target_sr", DEFAULT_AUDIO_PRESETS[DEFAULT_PRESET_NAME]["target_sr"]),
+                    "format": config.get("format", DEFAULT_AUDIO_PRESETS[DEFAULT_PRESET_NAME]["format"]),
+                    "stereo_width": config.get("stereo_width", DEFAULT_AUDIO_PRESETS[DEFAULT_PRESET_NAME]["stereo_width"]),
+                    "dynamic": config.get("dynamic", DEFAULT_AUDIO_PRESETS[DEFAULT_PRESET_NAME]["dynamic"]),
+                    "dsp_context": config.get("dsp_context", DEFAULT_AUDIO_PRESETS[DEFAULT_PRESET_NAME]["dsp_context"]),
+                }
+            )
+            self.apply_audio_preset_values(current_values)
+            self.refresh_preset_spinner()
+
             self.input_chunk_threshold.text = str(config.get("chunk_threshold_mb", "150"))
-            if hasattr(self, "input_dsp_context"):
-                self.input_dsp_context.text = str(config.get("dsp_context", "0.04"))
             self.input_output_dir.text = str(
                 config.get(
                     "output_dir",
@@ -2268,14 +2547,14 @@ class DSREKivyRoot(BoxLayout):
         except Exception as e:
             if log:
                 self.write_log(f"[red]設定読み込みに失敗しました:[/] {e}")
-                try:
-                    self.status_label.text = "設定読み込みに失敗しました"
-                except Exception:
-                    pass
-                try:
-                    self.show_alert("設定読み込みエラー", f"設定読み込みに失敗しました\n{e}")
-                except Exception:
-                    pass
+            try:
+                self.status_label.text = "設定読み込みに失敗しました"
+            except Exception:
+                pass
+            try:
+                self.show_alert("設定読み込みエラー", f"設定読み込みに失敗しました\n{e}")
+            except Exception:
+                pass
 
 class DSREKivyApp(App):
     title = APP_NAME
