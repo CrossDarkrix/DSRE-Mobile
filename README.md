@@ -3,6 +3,8 @@
 	<img width="150px" height="150px" alt="DSRE-Mobile" src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/icon.png"></a>
 </div>
 
+## May/19/2026 : Add English support!!!
+
 
 # [DSRE / Deep Sound Resolution Enhancer](https://github.com/Urabewe/DSRE---Digital-Sound-Resolution-Enhancer-English)のAndroid版
 

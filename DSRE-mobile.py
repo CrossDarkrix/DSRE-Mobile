@@ -37,47 +37,21 @@ CONFIG_FILE = os.path.join(DSRE_DOCUMENT_DIR, "dsre_kivy_config.json")
 FFLOG_FILE = os.path.join(DSRE_DOCUMENT_DIR, "fflog.txt")
 
 DEFAULT_AUDIO_PRESETS: Dict[str, Dict[str, Any]] = {
-    "基準: 明瞭バランス 15/0.47": {
-        "m": "15",
-        "decay": "0.47",
-        "target_sr": "48000",
-        "format": "ALAC",
-        "stereo_width": "0.98",
-        "dynamic": "1.11",
-        "dsp_context": "0.04",
-    },
-    "狭め明瞭: 15/0.48": {
-        "m": "15",
-        "decay": "0.48",
-        "target_sr": "48000",
-        "format": "ALAC",
-        "stereo_width": "0.78",
-        "dynamic": "1.03",
-        "dsp_context": "0.02",
-    },
-    "自然寄り: 14/0.45": {
-        "m": "14",
-        "decay": "0.45",
-        "target_sr": "48000",
-        "format": "ALAC",
-        "stereo_width": "0.98",
-        "dynamic": "1.10",
-        "dsp_context": "0.04",
-    },
+    "基準 / Reference: 15/0.47": {"m": "15", "decay": "0.47", "target_sr": "48000", "format": "ALAC", "stereo_width": "0.98", "dynamic": "1.11", "dsp_context": "0.04"},
+    "狭め明瞭 / Clear Narrow: 15/0.48": {"m": "15", "decay": "0.48", "target_sr": "48000", "format": "ALAC", "stereo_width": "0.78", "dynamic": "1.03", "dsp_context": "0.02"},
+    "自然寄り / Natural: 14/0.45": {"m": "14", "decay": "0.45", "target_sr": "48000", "format": "ALAC", "stereo_width": "0.98", "dynamic": "1.10", "dsp_context": "0.04"},
 }
 PRESET_NAME_ALIASES: Dict[str, str] = {
-    "Reference 15 / 0.47": "基準: 明瞭バランス 15/0.47",
-    "Clear Narrow 15 / 0.48": "狭め明瞭: 15/0.48",
-    "Natural 14 / 0.45": "自然寄り: 14/0.45",
+    "Reference 15 / 0.47": "基準 / Reference: 15/0.47",
+    "Clear Narrow 15 / 0.48": "狭め明瞭 / Clear Narrow: 15/0.48",
+    "Natural 14 / 0.45": "自然寄り / Natural: 14/0.45",
+    "基準: 明瞭バランス 15/0.47": "基準 / Reference: 15/0.47",
+    "狭め明瞭: 15/0.48": "狭め明瞭 / Clear Narrow: 15/0.48",
+    "自然寄り: 14/0.45": "自然寄り / Natural: 14/0.45",
 }
-DEFAULT_PRESET_NAME = "基準: 明瞭バランス 15/0.47"
+DEFAULT_PRESET_NAME = "基準 / Reference: 15/0.47"
 IMMUTABLE_PRESET_NAMES = set(DEFAULT_AUDIO_PRESETS.keys())
-PRESET_DISPLAY_ORDER: List[str] = [
-    DEFAULT_PRESET_NAME,
-    "狭め明瞭: 15/0.48" if "狭め明瞭: 15/0.48" in DEFAULT_AUDIO_PRESETS else "Clear Narrow 15 / 0.48",
-    "自然寄り: 14/0.45" if "自然寄り: 14/0.45" in DEFAULT_AUDIO_PRESETS else "Natural 14 / 0.45",
-]
-
+PRESET_DISPLAY_ORDER: List[str] = ["基準 / Reference: 15/0.47", "狭め明瞭 / Clear Narrow: 15/0.48", "自然寄り / Natural: 14/0.45"]
 
 def normalize_preset_values(values: Optional[Dict[str, Any]]) -> Dict[str, str]:
     values = values or {}
@@ -90,11 +64,115 @@ def normalize_preset_values(values: Optional[Dict[str, Any]]) -> Dict[str, str]:
         base["format"] = "ALAC"
     return base
 
-
 def copy_default_presets() -> Dict[str, Dict[str, str]]:
     return {name: normalize_preset_values(values) for name, values in DEFAULT_AUDIO_PRESETS.items()}
 
+UI_LANGUAGES: Dict[str, str] = {"ja": "日本語", "en": "English"}
+UI_TEXT: Dict[str, Dict[str, str]] = {
+    "ja": {"language": "Language / 言語", "input": "入力", "audio_file_path": "音声ファイルパス", "browse": "参照", "add_file": "ファイル追加", "directory_batch_add": "ディレクトリ一括追加", "recursive_scan": "再帰スキャン", "clear_list": "リストクリア", "settings": "設定", "format": "Format", "preset": "Preset / プリセット", "apply_preset": "プリセット適用", "save_preset": "プリセット登録", "delete_preset": "プリセット削除", "output_directory": "Output Directory", "save_settings": "設定保存", "load_settings": "設定読込", "processing": "処理", "start": "開始", "cancel": "キャンセル", "retry": "再処理", "current_file": "現在ファイル", "overall": "全体", "ready": "Ready", "language_changed_restart": "言語を変更しました。設定保存後、再起動すると全体に反映されます。"},
+    "en": {"language": "Language", "input": "Input", "audio_file_path": "Audio file path", "browse": "Browse", "add_file": "Add File", "directory_batch_add": "Add Directory", "recursive_scan": "Recursive Scan", "clear_list": "Clear List", "settings": "Settings", "format": "Format", "preset": "Preset", "apply_preset": "Apply Preset", "save_preset": "Save Preset", "delete_preset": "Delete Preset", "output_directory": "Output Directory", "save_settings": "Save Settings", "load_settings": "Load Settings", "processing": "Processing", "start": "Start", "cancel": "Cancel", "retry": "Retry", "current_file": "Current File", "overall": "Overall", "ready": "Ready", "language_changed_restart": "Language changed. Save settings and restart to apply it everywhere."},
+}
 
+EXTRA_UI_TEXT: Dict[str, Dict[str, str]] = {
+    "ja": {
+        "cancel_dialog": "キャンセル",
+        "select_dialog": "選択",
+        "file_add_failed": "追加できません: 音声ファイルでない、存在しない、または追加済みです",
+        "directory_not_found": "Directory not found",
+        "directory_scan_completed": "Directory scan completed: {added} files added",
+        "already_processing": "Already processing",
+        "no_files_selected": "No files selected",
+        "invalid_parameters": "Invalid parameters",
+        "processing_aborted": "Processing aborted",
+        "no_active_processing": "No active processing",
+        "cannot_clear_processing": "Cannot clear while processing",
+        "preset_name": "プリセット名",
+        "preset_not_found": "プリセットが見つかりません",
+        "preset_applied": "プリセット適用",
+        "preset_name_empty": "プリセット名が空です",
+        "immutable_preset_overwrite_denied": "標準プリセットは上書きできません",
+        "preset_saved": "プリセット登録",
+        "open_save_preset_failed": "プリセット登録画面を開けません",
+        "no_user_preset_to_delete": "削除できるユーザープリセットがありません",
+        "immutable_preset_delete_denied": "標準プリセットは削除できません",
+        "preset_deleted": "プリセット削除",
+        "open_delete_preset_failed": "プリセット削除画面を開けません",
+        "settings_saved": "設定を保存しました",
+        "settings_save_title": "設定保存",
+        "settings_written": "設定を書き込みました",
+        "settings_save_failed": "設定保存に失敗しました",
+        "settings_save_error_title": "設定保存エラー",
+        "settings_file_missing": "設定ファイルが見つかりません",
+        "settings_load_title": "設定読み込み",
+        "settings_loaded": "設定を読み込みました",
+        "settings_load_failed": "設定読み込みに失敗しました",
+        "settings_load_error_title": "設定読み込みエラー",
+        "streaming_api_missing": "Streaming API が libdsre_audio.so に見つかりません。native 側を再ビルドしてください。",
+        "details_check": "詳細は {path} を確認してください",
+        "saved": "Saved",
+        "processing_finished": "Processing finished",
+    },
+    "en": {
+        "cancel_dialog": "Cancel",
+        "select_dialog": "Select",
+        "file_add_failed": "Cannot add: not an audio file, missing, or already added",
+        "directory_not_found": "Directory not found",
+        "directory_scan_completed": "Directory scan completed: {added} files added",
+        "already_processing": "Already processing",
+        "no_files_selected": "No files selected",
+        "invalid_parameters": "Invalid parameters",
+        "processing_aborted": "Processing aborted",
+        "no_active_processing": "No active processing",
+        "cannot_clear_processing": "Cannot clear while processing",
+        "preset_name": "Preset name",
+        "preset_not_found": "Preset not found",
+        "preset_applied": "Preset applied",
+        "preset_name_empty": "Preset name is empty",
+        "immutable_preset_overwrite_denied": "Built-in presets cannot be overwritten",
+        "preset_saved": "Preset saved",
+        "open_save_preset_failed": "Could not open preset save dialog",
+        "no_user_preset_to_delete": "There are no user presets to delete",
+        "immutable_preset_delete_denied": "Built-in presets cannot be deleted",
+        "preset_deleted": "Preset deleted",
+        "open_delete_preset_failed": "Could not open preset delete dialog",
+        "settings_saved": "Settings saved",
+        "settings_save_title": "Save Settings",
+        "settings_written": "Settings written",
+        "settings_save_failed": "Failed to save settings",
+        "settings_save_error_title": "Save Settings Error",
+        "settings_file_missing": "Settings file not found",
+        "settings_load_title": "Load Settings",
+        "settings_loaded": "Settings loaded",
+        "settings_load_failed": "Failed to load settings",
+        "settings_load_error_title": "Load Settings Error",
+        "streaming_api_missing": "Streaming API was not found in libdsre_audio.so. Please rebuild the native side.",
+        "details_check": "Check details at {path}",
+        "saved": "Saved",
+        "processing_finished": "Processing finished",
+    },
+}
+for _lang, _texts in EXTRA_UI_TEXT.items():
+    UI_TEXT.setdefault(_lang, {}).update(_texts)
+
+def normalize_language(value: Any) -> str:
+    value = str(value or "ja").strip().lower()
+    if value in ("en", "english"):
+        return "en"
+    return "ja"
+
+def load_initial_language(config_path: str) -> str:
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            return normalize_language(config.get("language", "ja"))
+    except Exception:
+        pass
+    return "ja"
+
+def ui_text(language: str, key: str) -> str:
+    lang = normalize_language(language)
+    return UI_TEXT.get(lang, UI_TEXT["ja"]).get(key, UI_TEXT["ja"].get(key, key))
 
 def write_fflog(
     title: str,
@@ -1606,12 +1684,12 @@ class DSREProcessor:
 
         native = get_native_audio()
         if not getattr(native, "streaming_available", False):
-            self.logs("[red]Streaming API が libdsre_audio.so に見つかりません。native 側を再ビルドしてください。[/]")
+            self.logs(f"[red]{self.tr("streaming_api_missing")}[/]")
             return
 
         for idx, in_path in enumerate(self.files, start=1):
             if self.abort_cb():
-                self.logs("[yellow]Processing aborted[/]")
+                self.logs(f"[yellow]{self.tr("processing_aborted")}[/]")
                 break
 
             fname = os.path.basename(in_path)
@@ -1653,7 +1731,7 @@ class DSREProcessor:
                         fmt=self.params["format"],
                     )
 
-                    self.logs(f"[green]Saved:[/] {out_path}")
+                    self.logs(f"[green]{self.tr("saved")}:[/] {out_path}")
                     self.processing_stats["processed_files"] += 1
                     self.processing_stats["processed_size_mb"] += file_size_mb
                     break
@@ -1682,7 +1760,7 @@ class DSREProcessor:
                     force_release_memory()
 
                     if self.abort_cb():
-                        self.logs("[yellow]Processing aborted[/]")
+                        self.logs(f"[yellow]{self.tr("processing_aborted")}[/]")
                         break
 
                     if retry_count <= max_retries and error_type != "fatal":
@@ -1693,7 +1771,7 @@ class DSREProcessor:
                         time.sleep(1)
                     else:
                         self.logs(f"[red][Error][/] {fname}: {err}")
-                        self.logs(f"詳細は {FFLOG_FILE} を確認してください")
+                        self.logs(self.tr("details_check").format(path=FFLOG_FILE))
                         self.processing_stats["failed_files"] += 1
                         break
 
@@ -1703,7 +1781,7 @@ class DSREProcessor:
             self.stats(dict(self.processing_stats))
             force_release_memory()
 
-        self.logs("[bold green]Processing finished[/]")
+        self.logs(f"[bold green]{self.tr("processing_finished")}[/]")
 
 MATERIAL = {
     "bg": (0.070, 0.082, 0.102, 1),
@@ -1873,7 +1951,7 @@ class FileChooserPopup(ModalView):
         self.size_hint = (0.96, 0.92)
         self.auto_dismiss = False
         root = MaterialCard(orientation="vertical")
-        root.add_widget(SectionTitle(text="ディレクトリを選択" if choose_dir else "音声ファイルを選択"))
+        root.add_widget(SectionTitle(text=ui_text(load_initial_language(CONFIG_FILE), "directory_select") if choose_dir else ui_text(load_initial_language(CONFIG_FILE), "audio_file_select")))
         self.chooser = _FileChooserListView(path=os.getenv('EXTERNAL_STORAGE'), dirselect=choose_dir)
         font = get_ui_font()
         if font:
@@ -1882,8 +1960,8 @@ class FileChooserPopup(ModalView):
             self.chooser.filters = [lambda folder, filename: os.path.isdir(filename) or os.path.splitext(filename.lower())[1] in AUDIO_EXTENSIONS]
         root.add_widget(self.chooser)
         row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
-        cancel = MaterialButton(text="キャンセル", kind="flat")
-        ok = MaterialButton(text="選択", kind="primary")
+        cancel = MaterialButton(text=self.tr("cancel"), kind="flat")
+        ok = MaterialButton(text=ui_text(load_initial_language(CONFIG_FILE), "select_dialog"), kind="primary")
         cancel.bind(on_release=lambda *_: self.dismiss())
         ok.bind(on_release=self._select)
         row.add_widget(cancel)
@@ -1907,6 +1985,7 @@ class DSREKivyRoot(BoxLayout):
         self.cancel_requested = False
         self.processor_thread = None
         self.config_path = CONFIG_FILE
+        self.language = load_initial_language(self.config_path)
         self.presets = copy_default_presets()
         self.active_preset_name = DEFAULT_PRESET_NAME
         Window.minimum_width = 360
@@ -1918,17 +1997,37 @@ class DSREKivyRoot(BoxLayout):
         self.bind(pos=self._sync_bg, size=self._sync_bg)
         self._build_ui()
         self.load_config(log=False)
-        self.update_status("Ready")
+        self.update_status(self.tr("ready"))
 
     def _sync_bg(self, *_):
         self._bg.pos = self.pos
         self._bg.size = self.size
 
+    def tr(self, key: str) -> str:
+        return ui_text(getattr(self, "language", "ja"), key)
+
+    def language_label(self) -> str:
+        return UI_LANGUAGES.get(normalize_language(getattr(self, "language", "ja")), "日本語")
+
+    def language_code_from_label(self, label: str) -> str:
+        return "en" if str(label).strip().lower() == "english" else "ja"
+
+    def on_language_changed(self, spinner, value):
+        self.language = self.language_code_from_label(value)
+        try:
+            self.status_label.text = self.tr("language_changed_restart")
+        except Exception:
+            pass
+        try:
+            self.write_log(self.tr("language_changed_restart"))
+        except Exception:
+            pass
+
     def _build_ui(self):
         header = MaterialCard(orientation="vertical", size_hint_y=None, height=dp(70), padding=dp(10))
         header.add_widget(MaterialLabel(text="DSRE Audio Enhancer", font_size="20sp", bold=True, size_hint_y=None, height=dp(30)))
         font_info = get_ui_font() or "_ja_JP.ttf not found"
-        header.add_widget(SmallLabel(text="version: 2.0.5"))
+        header.add_widget(SmallLabel(text="version: 2.0.7"))
         self.add_widget(header)
 
         scroll = ScrollView(do_scroll_x=False)
@@ -1938,41 +2037,48 @@ class DSREKivyRoot(BoxLayout):
         self.add_widget(scroll)
         file_card = MaterialCard(orientation="vertical", size_hint_y=None)
         file_card.bind(minimum_height=file_card.setter("height"))
-        file_card.add_widget(SectionTitle(text="入力"))
+        file_card.add_widget(SectionTitle(text=self.tr("input")))
         row_file = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
-        self.input_file = MaterialInput(hint_text="音声ファイルパス")
-        browse_file = MaterialButton(text="参照", kind="flat", size_hint_x=None, width=dp(70))
+        self.input_file = MaterialInput(hint_text=self.tr("audio_file_path"))
+        browse_file = MaterialButton(text=self.tr("browse"), kind="flat", size_hint_x=None, width=dp(70))
         browse_file.bind(on_release=lambda *_: FileChooserPopup(self._set_file_path).open())
         row_file.add_widget(self.input_file)
         row_file.add_widget(browse_file)
         file_card.add_widget(row_file)
-        add_file = MaterialButton(text="ファイル追加", kind="primary")
+        add_file = MaterialButton(text=self.tr("add_file"), kind="primary")
         add_file.bind(on_release=lambda *_: self.handle_add_file())
         file_card.add_widget(add_file)
 
         row_dir = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
-        self.input_directory = MaterialInput(hint_text="ディレクトリ一括追加")
-        browse_dir = MaterialButton(text="参照", kind="flat", size_hint_x=None, width=dp(70))
+        self.input_directory = MaterialInput(hint_text=self.tr("directory_batch_add"))
+        browse_dir = MaterialButton(text=self.tr("browse"), kind="flat", size_hint_x=None, width=dp(70))
         browse_dir.bind(on_release=lambda *_: FileChooserPopup(self._set_dir_path, choose_dir=True).open())
         row_dir.add_widget(self.input_directory)
         row_dir.add_widget(browse_dir)
         file_card.add_widget(row_dir)
-        scan_dir = MaterialButton(text="再帰スキャン", kind="primary")
+        scan_dir = MaterialButton(text=self.tr("recursive_scan"), kind="primary")
         scan_dir.bind(on_release=lambda *_: self.handle_scan_directory())
         file_card.add_widget(scan_dir)
         self.file_summary_label = SmallLabel(text="0 files", height=dp(38))
         file_card.add_widget(self.file_summary_label)
-        clear = MaterialButton(text="リストクリア", kind="flat")
+        clear = MaterialButton(text=self.tr("clear_list"), kind="flat")
         clear.bind(on_release=lambda *_: self.clear_files())
         file_card.add_widget(clear)
         content.add_widget(file_card)
         param_card = MaterialCard(orientation="vertical", size_hint_y=None)
         param_card.bind(minimum_height=param_card.setter("height"))
-        param_card.add_widget(SectionTitle(text="設定"))
+        param_card.add_widget(SectionTitle(text=self.tr("settings")))
+        param_card.add_widget(SmallLabel(text=self.tr("language")))
+        self.input_language = MaterialSpinner(text=self.language_label(), values=("日本語", "English"), size_hint_y=None, height=dp(40), background_normal="", background_color=MATERIAL["surface_alt"], color=MATERIAL["text"])
+        font = get_ui_font()
+        if font:
+            self.input_language.font_name = font
+        self.input_language.bind(text=self.on_language_changed)
+        param_card.add_widget(self.input_language)
         self.input_m = self._param(param_card, "Harmonic 1-32", "15")
         self.input_decay = self._param(param_card, "Strength 0.1-1.0", "0.47")
         self.input_sr = self._param(param_card, "Sample Rate", "48000")
-        param_card.add_widget(SmallLabel(text="Format"))
+        param_card.add_widget(SmallLabel(text=self.tr("format")))
         self.input_format = MaterialSpinner(text="ALAC", values=("ALAC", "FLAC", "MP3"), size_hint_y=None, height=dp(40), background_normal="", background_color=MATERIAL["surface_alt"], color=MATERIAL["text"])
         font = get_ui_font()
         if font:
@@ -1982,7 +2088,7 @@ class DSREKivyRoot(BoxLayout):
         self.input_dynamic = self._param(param_card, "Dynamic", "1.11")
         self.input_chunk_threshold = self._param(param_card, "Chunk MB", "150")
         self.input_dsp_context = self._param(param_card, "DSP Context sec", "0.04")
-        param_card.add_widget(SmallLabel(text="Preset"))
+        param_card.add_widget(SmallLabel(text=self.tr("preset")))
         self.input_preset = MaterialSpinner(
             text=DEFAULT_PRESET_NAME,
             values=tuple(DEFAULT_AUDIO_PRESETS.keys()),
@@ -1998,9 +2104,9 @@ class DSREKivyRoot(BoxLayout):
         param_card.add_widget(self.input_preset)
 
         preset_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
-        apply_preset = MaterialButton(text="プリセット適用", kind="primary")
-        save_preset = MaterialButton(text="プリセット登録", kind="secondary")
-        delete_preset = MaterialButton(text="プリセット削除", kind="flat")
+        apply_preset = MaterialButton(text=self.tr("apply_preset"), kind="primary")
+        save_preset = MaterialButton(text=self.tr("save_preset"), kind="secondary")
+        delete_preset = MaterialButton(text=self.tr("delete_preset"), kind="flat")
         apply_preset.bind(on_release=lambda *_: self.apply_selected_preset())
         save_preset.bind(on_release=lambda *_: self.open_save_preset_dialog())
         delete_preset.bind(on_release=lambda *_: self.open_delete_preset_dialog())
@@ -2008,21 +2114,21 @@ class DSREKivyRoot(BoxLayout):
         preset_row.add_widget(save_preset)
         preset_row.add_widget(delete_preset)
         param_card.add_widget(preset_row)
-        param_card.add_widget(SmallLabel(text="Output Directory"))
+        param_card.add_widget(SmallLabel(text=self.tr("output_directory")))
         row_out = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
         if os.getenv('EXTERNAL_STORAGE'):
             out = os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents")
         else:
             out = os.path.expanduser('~')
         self.input_output_dir = MaterialInput(text=os.path.join(out, "enhanced_output"))
-        browse_out = MaterialButton(text="参照", kind="flat", size_hint_x=None, width=dp(70))
+        browse_out = MaterialButton(text=self.tr("browse"), kind="flat", size_hint_x=None, width=dp(70))
         browse_out.bind(on_release=lambda *_: FileChooserPopup(self._set_output_dir, choose_dir=True).open())
         row_out.add_widget(self.input_output_dir)
         row_out.add_widget(browse_out)
         param_card.add_widget(row_out)
         cfg_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
-        save = MaterialButton(text="設定保存", kind="secondary")
-        load = MaterialButton(text="設定読込", kind="flat")
+        save = MaterialButton(text=self.tr("save_settings"), kind="secondary")
+        load = MaterialButton(text=self.tr("load_settings"), kind="flat")
         save.bind(on_release=lambda *_: self.save_config())
         load.bind(on_release=lambda *_: self.load_config(log=True))
         cfg_row.add_widget(save)
@@ -2031,11 +2137,11 @@ class DSREKivyRoot(BoxLayout):
         content.add_widget(param_card)
         proc_card = MaterialCard(orientation="vertical", size_hint_y=None)
         proc_card.bind(minimum_height=proc_card.setter("height"))
-        proc_card.add_widget(SectionTitle(text="処理"))
+        proc_card.add_widget(SectionTitle(text=self.tr("processing")))
         action_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
-        self.start_button = MaterialButton(text="開始", kind="primary")
-        self.cancel_button = MaterialButton(text="キャンセル", kind="danger")
-        self.retry_button = MaterialButton(text="再処理", kind="flat")
+        self.start_button = MaterialButton(text=self.tr("start"), kind="primary")
+        self.cancel_button = MaterialButton(text=self.tr("cancel"), kind="danger")
+        self.retry_button = MaterialButton(text=self.tr("retry"), kind="flat")
         self.start_button.bind(on_release=lambda *_: self.start_processing())
         self.cancel_button.bind(on_release=lambda *_: self.cancel_processing())
         self.retry_button.bind(on_release=lambda *_: self.start_processing())
@@ -2044,13 +2150,13 @@ class DSREKivyRoot(BoxLayout):
         action_row.add_widget(self.retry_button)
         proc_card.add_widget(action_row)
         self.update_action_buttons()
-        proc_card.add_widget(SmallLabel(text="現在ファイル"))
+        proc_card.add_widget(SmallLabel(text=self.tr("current_file")))
         self.file_bar = ProgressBar(max=100, value=0, size_hint_y=None, height=dp(14))
         proc_card.add_widget(self.file_bar)
-        proc_card.add_widget(SmallLabel(text="全体"))
+        proc_card.add_widget(SmallLabel(text=self.tr("overall")))
         self.overall_bar = ProgressBar(max=100, value=0, size_hint_y=None, height=dp(14))
         proc_card.add_widget(self.overall_bar)
-        self.status_label = MaterialLabel(text="Ready", size_hint_y=None, height=dp(34), font_size="12sp")
+        self.status_label = MaterialLabel(text=self.tr("ready"), size_hint_y=None, height=dp(34), font_size="12sp")
         proc_card.add_widget(self.status_label)
         self.stats_label = MaterialLabel(text="0 files ready", color=MATERIAL["muted"], size_hint_y=None, height=dp(54), font_size="12sp")
         proc_card.add_widget(self.stats_label)
@@ -2100,7 +2206,7 @@ class DSREKivyRoot(BoxLayout):
         if not is_audio_file(path) or path in self.files:
             return False
         self.files.append(path)
-        self.update_status("Ready")
+        self.update_status(self.tr("ready"))
         return True
 
     def add_directory_to_list(self, directory, recursive=True):
@@ -2109,7 +2215,7 @@ class DSREKivyRoot(BoxLayout):
         for path in collect_audio_files_from_directory(directory, recursive=recursive):
             if self.add_file_to_list(path):
                 added += 1
-        self.update_status("Ready")
+        self.update_status(self.tr("ready"))
         return added
 
     def handle_add_file(self):
@@ -2117,15 +2223,15 @@ class DSREKivyRoot(BoxLayout):
         if self.add_file_to_list(path):
             self.write_log(f"Added: {os.path.basename(path)}")
         else:
-            self.write_log("追加できません: 音声ファイルでない、存在しない、または追加済みです")
+            self.write_log(self.tr("file_add_failed"))
 
     def handle_scan_directory(self):
         directory = os.path.abspath(os.path.expanduser(self.input_directory.text.strip()))
         if not os.path.isdir(directory):
-            self.write_log(f"Directory not found: {directory}")
+            self.write_log(f"{self.tr("directory_not_found")}: {directory}")
             return
         added = self.add_directory_to_list(directory, recursive=True)
-        self.write_log(f"Directory scan completed: {added} files added")
+        self.write_log(self.tr("directory_scan_completed").format(added=added))
 
     def current_audio_preset_values(self) -> Dict[str, str]:
         return normalize_preset_values(
@@ -2178,39 +2284,39 @@ class DSREKivyRoot(BoxLayout):
     def apply_selected_preset(self):
         name = getattr(self, "input_preset", None).text if hasattr(self, "input_preset") else DEFAULT_PRESET_NAME
         if name not in self.presets:
-            self.write_log(f"プリセットが見つかりません: {name}")
+            self.write_log(f"{self.tr("preset_not_found")}: {name}")
             return
         self.active_preset_name = name
         self.apply_audio_preset_values(self.presets[name])
-        self.status_label.text = f"プリセット適用: {name}"
-        self.write_log(f"[green]プリセット適用:[/] {name}")
+        self.status_label.text = f"{self.tr("preset_applied")}: {name}"
+        self.write_log(f"[green]{self.tr("preset_applied")}:[/] {name}")
 
     def open_save_preset_dialog(self):
         try:
             popup = ModalView(size_hint=(0.90, None), height=dp(230), auto_dismiss=True)
             root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
-            root.add_widget(SectionTitle(text="プリセット登録"))
+            root.add_widget(SectionTitle(text=self.tr("save_preset")))
             name_input = MaterialInput(text=getattr(self, "input_preset", None).text if hasattr(self, "input_preset") else "New Preset")
-            root.add_widget(SmallLabel(text="プリセット名"))
+            root.add_widget(SmallLabel(text=self.tr("preset_name")))
             root.add_widget(name_input)
             row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
-            cancel = MaterialButton(text="キャンセル", kind="flat")
-            save = MaterialButton(text="登録", kind="primary")
+            cancel = MaterialButton(text=self.tr("cancel"), kind="flat")
+            save = MaterialButton(text=self.tr("save_preset"), kind="primary")
 
             def _save(*_):
                 name = name_input.text.strip()
                 if not name:
-                    self.write_log("プリセット名が空です")
+                    self.write_log(self.tr("preset_name_empty"))
                     return
                 if name in IMMUTABLE_PRESET_NAMES:
-                    self.write_log("標準プリセットは上書きできません")
+                    self.write_log(self.tr("immutable_preset_overwrite_denied"))
                     return
                 self.presets[name] = self.current_audio_preset_values()
                 self.active_preset_name = name
                 self.refresh_preset_spinner()
                 self.input_preset.text = name
-                self.write_log(f"[green]プリセット登録:[/] {name}")
-                self.status_label.text = f"プリセット登録: {name}"
+                self.write_log(f"[green]{self.tr("preset_saved")}:[/] {name}")
+                self.status_label.text = f"{self.tr("preset_saved")}: {name}"
                 popup.dismiss()
 
             cancel.bind(on_release=lambda *_: popup.dismiss())
@@ -2221,17 +2327,17 @@ class DSREKivyRoot(BoxLayout):
             popup.add_widget(root)
             popup.open()
         except Exception as e:
-            self.write_log(f"プリセット登録画面を開けません: {e}")
+            self.write_log(f"{self.tr("open_save_preset_failed")}: {e}")
 
     def open_delete_preset_dialog(self):
         try:
             deletable = [name for name in sorted(self.presets.keys()) if name not in IMMUTABLE_PRESET_NAMES]
             if not deletable:
-                self.write_log("削除できるユーザープリセットがありません")
+                self.write_log(self.tr("no_user_preset_to_delete"))
                 return
             popup = ModalView(size_hint=(0.90, None), height=dp(220), auto_dismiss=True)
             root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
-            root.add_widget(SectionTitle(text="プリセット削除"))
+            root.add_widget(SectionTitle(text=self.tr("delete_preset")))
             spinner = MaterialSpinner(
                 text=deletable[0],
                 values=tuple(deletable),
@@ -2246,21 +2352,21 @@ class DSREKivyRoot(BoxLayout):
                 spinner.font_name = font
             root.add_widget(spinner)
             row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
-            cancel = MaterialButton(text="キャンセル", kind="flat")
-            delete = MaterialButton(text="削除", kind="danger")
+            cancel = MaterialButton(text=self.tr("cancel"), kind="flat")
+            delete = MaterialButton(text=self.tr("delete_preset"), kind="danger")
 
             def _delete(*_):
                 name = spinner.text
                 if name in IMMUTABLE_PRESET_NAMES:
-                    self.write_log("標準プリセットは削除できません")
+                    self.write_log(self.tr("immutable_preset_delete_denied"))
                     return
                 if name in self.presets:
                     del self.presets[name]
                     if self.active_preset_name == name:
                         self.active_preset_name = DEFAULT_PRESET_NAME
                     self.refresh_preset_spinner()
-                    self.write_log(f"[yellow]プリセット削除:[/] {name}")
-                    self.status_label.text = f"プリセット削除: {name}"
+                    self.write_log(f"[yellow]{self.tr("preset_deleted")}:[/] {name}")
+                    self.status_label.text = f"{self.tr("preset_deleted")}: {name}"
                 popup.dismiss()
 
             cancel.bind(on_release=lambda *_: popup.dismiss())
@@ -2271,7 +2377,7 @@ class DSREKivyRoot(BoxLayout):
             popup.add_widget(root)
             popup.open()
         except Exception as e:
-            self.write_log(f"プリセット削除画面を開けません: {e}")
+            self.write_log(f"{self.tr("open_delete_preset_failed")}: {e}")
 
     def read_params(self):
         fmt = (self.input_format.text.strip() or "ALAC").upper()
@@ -2307,15 +2413,15 @@ class DSREKivyRoot(BoxLayout):
 
     def start_processing(self):
         if self.processing:
-            self.write_log("Already processing")
+            self.write_log(self.tr("already_processing"))
             return
         if not self.files:
-            self.write_log("No files selected")
+            self.write_log(self.tr("no_files_selected"))
             return
         try:
             params = self.read_params()
         except Exception as e:
-            self.write_log(f"Invalid parameters: {e}")
+            self.write_log(f"{self.tr("invalid_parameters")}: {e}")
             return
         output_dir = os.path.abspath(os.path.expanduser(self.input_output_dir.text.strip() or os.path.join(EXTERNAL_STORAGE, "Documents", "enhanced_output")))
         os.makedirs(output_dir, exist_ok=True)
@@ -2428,17 +2534,17 @@ class DSREKivyRoot(BoxLayout):
             self.status_label.text = "Cancel requested"
             
         else:
-            self.write_log("No active processing")
+            self.write_log(self.tr("no_active_processing"))
 
     def clear_files(self):
         if self.processing:
-            self.write_log("Cannot clear while processing")
+            self.write_log(self.tr("cannot_clear_processing"))
             return
         self.files = []
         self.file_bar.value = 0
         self.overall_bar.value = 0
         
-        self.update_status("Ready")
+        self.update_status(self.tr("ready"))
 
     def show_alert(self, title: str, message: str):
         """Small in-app modal alert. Save/load must continue even if popup fails."""
@@ -2480,6 +2586,7 @@ class DSREKivyRoot(BoxLayout):
             }
             config = {
                 "schema_version": 2,
+                "language": self.language,
                 "active_preset": self.active_preset_name,
                 "presets": user_presets,
                 "m": self.input_m.text,
@@ -2496,17 +2603,17 @@ class DSREKivyRoot(BoxLayout):
             }
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-            self.write_log(f"[green]設定を保存しました:[/] {self.config_path}")
-            self.status_label.text = "設定を保存しました"
-            self.show_alert("設定保存", f"設定を書き込みました\n{self.config_path}")
+            self.write_log(f"[green]{self.tr("settings_saved")}:[/] {self.config_path}")
+            self.status_label.text = self.tr("settings_saved")
+            self.show_alert(self.tr("settings_save_title"), f"{self.tr("settings_written")}\n{self.config_path}")
         except Exception as e:
-            self.write_log(f"[red]設定保存に失敗しました:[/] {e}")
+            self.write_log(f"[red]{self.tr("settings_save_failed")}:[/] {e}")
             try:
-                self.status_label.text = "設定保存に失敗しました"
+                self.status_label.text = self.tr("settings_save_failed")
             except Exception:
                 pass
             try:
-                self.show_alert("設定保存エラー", f"設定保存に失敗しました\n{e}")
+                self.show_alert(self.tr("settings_save_error_title"), f"{self.tr("settings_save_failed")}\n{e}")
             except Exception:
                 pass
 
@@ -2519,13 +2626,16 @@ class DSREKivyRoot(BoxLayout):
                 self.apply_audio_preset_values(DEFAULT_AUDIO_PRESETS[DEFAULT_PRESET_NAME])
                 self.refresh_preset_spinner()
                 if log:
-                    self.write_log(f"設定ファイルが見つかりません: {self.config_path}")
-                    self.status_label.text = "設定ファイルが見つかりません"
-                    self.show_alert("設定読み込み", f"設定ファイルが見つかりません\n{self.config_path}")
+                    self.write_log(f"{self.tr("settings_file_missing")}: {self.config_path}")
+                    self.status_label.text = self.tr("settings_file_missing")
+                    self.show_alert(self.tr("settings_load_title"), f"{self.tr("settings_file_missing")}\n{self.config_path}")
                 return
 
             with open(self.config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
+            self.language = normalize_language(config.get("language", getattr(self, "language", "ja")))
+            if hasattr(self, "input_language"):
+                self.input_language.text = self.language_label()
 
             saved_presets = config.get("presets", {})
             if isinstance(saved_presets, dict):
@@ -2566,18 +2676,18 @@ class DSREKivyRoot(BoxLayout):
             self.input_file.text = str(config.get("last_file", ""))
 
             if log:
-                self.write_log(f"[green]設定を読み込みました:[/] {self.config_path}")
-                self.status_label.text = "設定を読み込みました"
-                self.show_alert("設定読み込み", f"設定を読み込みました\n{self.config_path}")
+                self.write_log(f"[green]{self.tr("settings_loaded")}:[/] {self.config_path}")
+                self.status_label.text = self.tr("settings_loaded")
+                self.show_alert(self.tr("settings_load_title"), f"{self.tr("settings_loaded")}\n{self.config_path}")
         except Exception as e:
             if log:
-                self.write_log(f"[red]設定読み込みに失敗しました:[/] {e}")
+                self.write_log(f"[red]{self.tr("settings_load_failed")}:[/] {e}")
             try:
-                self.status_label.text = "設定読み込みに失敗しました"
+                self.status_label.text = self.tr("settings_load_failed")
             except Exception:
                 pass
             try:
-                self.show_alert("設定読み込みエラー", f"設定読み込みに失敗しました\n{e}")
+                self.show_alert(self.tr("settings_load_error_title"), f"{self.tr("settings_load_failed")}\n{e}")
             except Exception:
                 pass
 
