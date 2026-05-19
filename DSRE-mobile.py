@@ -1631,7 +1631,8 @@ class DSREProcessor:
                     self.step_progress(min(94, 8 + (chunk_index % 86)), f"chunk {chunk_index}")
                     chunk = None
                     processed = None
-                    force_release_memory()
+                    if chunk_index % int(self.params.get("gc_interval_chunks", 8)) == 0:
+                        force_release_memory()
 
                 if eof:
                     break
@@ -2084,6 +2085,8 @@ class DSREKivyRoot(BoxLayout):
         self.input_stereo_width = self._param(param_card, "Stereo Width", "0.98")
         self.input_dynamic = self._param(param_card, "Dynamic", "1.11")
         self.input_chunk_threshold = self._param(param_card, "Chunk MB", "150")
+        self.input_stream_chunk_seconds = self._param(param_card, "Stream Chunk sec", "12.0")
+        self.input_gc_interval_chunks = self._param(param_card, "GC interval chunks", "8")
         self.input_dsp_context = self._param(param_card, "DSP Context sec", "0.04")
         param_card.add_widget(SmallLabel(text=self.tr("preset")))
         self.input_preset = MaterialSpinner(
@@ -2388,6 +2391,8 @@ class DSREKivyRoot(BoxLayout):
             "stereo_width": float(np.clip(float(self.input_stereo_width.text.strip() or "0.98"), 1.0, 1.8)),
             "dynamic": float(np.clip(float(self.input_dynamic.text.strip() or "1.11"), 1.0, 1.5)),
             "chunk_threshold_mb": max(1.0, float(self.input_chunk_threshold.text.strip() or "150")),
+            "stream_chunk_seconds": float(np.clip(float(getattr(self, "input_stream_chunk_seconds", None).text.strip() if getattr(self, "input_stream_chunk_seconds", None) else "12.0"), 2.0, 24.0)),
+            "gc_interval_chunks": int(np.clip(int(float(getattr(self, "input_gc_interval_chunks", None).text.strip() if getattr(self, "input_gc_interval_chunks", None) else "8")), 1, 64)),
             "dsp_context": float(np.clip(float(self.input_dsp_context.text.strip() or "0.04"), 0.0, 0.08)),
         }
 
@@ -2592,6 +2597,8 @@ class DSREKivyRoot(BoxLayout):
                 "stereo_width": self.input_stereo_width.text,
                 "dynamic": self.input_dynamic.text,
                 "chunk_threshold_mb": self.input_chunk_threshold.text,
+                "stream_chunk_seconds": getattr(self, "input_stream_chunk_seconds", None).text if getattr(self, "input_stream_chunk_seconds", None) else "12.0",
+                "gc_interval_chunks": getattr(self, "input_gc_interval_chunks", None).text if getattr(self, "input_gc_interval_chunks", None) else "8",
                 "dsp_context": getattr(self, "input_dsp_context", None).text if getattr(self, "input_dsp_context", None) else "0.04",
                 "output_dir": self.input_output_dir.text,
                 "last_directory": self.input_directory.text,
@@ -2662,6 +2669,10 @@ class DSREKivyRoot(BoxLayout):
             self.refresh_preset_spinner()
 
             self.input_chunk_threshold.text = str(config.get("chunk_threshold_mb", "150"))
+            if hasattr(self, "input_stream_chunk_seconds"):
+                self.input_stream_chunk_seconds.text = str(config.get("stream_chunk_seconds", "12.0"))
+            if hasattr(self, "input_gc_interval_chunks"):
+                self.input_gc_interval_chunks.text = str(config.get("gc_interval_chunks", "8"))
             self.input_output_dir.text = str(
                 config.get(
                     "output_dir",

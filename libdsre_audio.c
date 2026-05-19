@@ -1353,6 +1353,8 @@ DSRE_EXPORT int dsre_decoder_open(
     if (!d->dec_ctx) { dsre_set_error("stream decoder context allocation failed"); ret = DSRE_ERR_ALLOC; goto fail; }
     ret = avcodec_parameters_to_context(d->dec_ctx, d->fmt_ctx->streams[d->audio_stream_index]->codecpar);
     if (ret < 0) { dsre_set_av_error("stream decoder parameters_to_context failed", ret); ret = DSRE_ERR_CODEC; goto fail; }
+    d->dec_ctx->thread_count = 0;
+    d->dec_ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
     ret = avcodec_open2(d->dec_ctx, d->decoder, NULL);
     if (ret < 0) { dsre_set_av_error("stream decoder avcodec_open2 failed", ret); ret = DSRE_ERR_CODEC; goto fail; }
 
@@ -1656,6 +1658,8 @@ DSRE_EXPORT int dsre_encoder_open(
         e->enc_ctx->sample_fmt = AV_SAMPLE_FMT_FLTP;
     }
     if (e->out_fmt->oformat->flags & AVFMT_GLOBALHEADER) e->enc_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    e->enc_ctx->thread_count = 0;
+    e->enc_ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
     ret = avcodec_open2(e->enc_ctx, e->encoder, NULL);
     if (ret < 0) { dsre_set_av_error("stream encoder avcodec_open2 failed", ret); ret = DSRE_ERR_CODEC; goto fail; }
     ret = avcodec_parameters_from_context(e->stream->codecpar, e->enc_ctx);
