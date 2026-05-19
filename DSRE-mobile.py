@@ -225,6 +225,30 @@ PREPROCESS_NOTICE_UI_TEXT: Dict[str, Dict[str, str]] = {
 for _lang, _texts in PREPROCESS_NOTICE_UI_TEXT.items():
     UI_TEXT.setdefault(_lang, {}).update(_texts)
 
+
+DIAGNOSTIC_UI_TEXT: Dict[str, Dict[str, str]] = {
+    "ja": {
+        "diagnostics": "診断ログ",
+        "diagnostics_title": "診断ログ",
+        "diagnostics_empty": "まだ診断ログはありません。",
+        "diagnostics_clear": "ログ表示をクリア",
+        "diagnostics_close": "閉じる",
+        "diagnostics_cleared": "診断ログ表示をクリアしました",
+        "diagnostics_note": "この画面はスナップショット表示です。処理中に自動更新しないため、描画負荷を抑えます。詳細な例外は fflog.txt に保存されます。",
+    },
+    "en": {
+        "diagnostics": "Diagnostics",
+        "diagnostics_title": "Diagnostics",
+        "diagnostics_empty": "No diagnostic logs yet.",
+        "diagnostics_clear": "Clear View",
+        "diagnostics_close": "Close",
+        "diagnostics_cleared": "Diagnostic log view cleared",
+        "diagnostics_note": "This is a snapshot view. It does not live-update during processing, which avoids rendering load. Detailed exceptions are saved to fflog.txt.",
+    },
+}
+for _lang, _texts in DIAGNOSTIC_UI_TEXT.items():
+    UI_TEXT.setdefault(_lang, {}).update(_texts)
+
 def normalize_language(value: Any) -> str:
     value = str(value or "ja").strip().lower()
     if value in ("en", "english"):
@@ -2095,6 +2119,7 @@ class DSREKivyRoot(BoxLayout):
         self.language = load_initial_language(self.config_path)
         self.presets = copy_default_presets()
         self.active_preset_name = DEFAULT_PRESET_NAME
+        self.debug_log_lines = []
         self.safety_notice_accepted = False
         Window.minimum_width = 360
         Window.minimum_height = 560
@@ -2344,6 +2369,9 @@ class DSREKivyRoot(BoxLayout):
         proc_card.add_widget(self.status_label)
         self.stats_label = MaterialLabel(text="0 files ready", color=MATERIAL["muted"], size_hint_y=None, height=dp(54), font_size="12sp")
         proc_card.add_widget(self.stats_label)
+        diagnostics_button = MaterialButton(text=self.tr('diagnostics'), kind="flat")
+        diagnostics_button.bind(on_release=lambda *_: self.open_diagnostics_dialog())
+        proc_card.add_widget(diagnostics_button)
         content.add_widget(proc_card)
 
     def _param(self, parent, label, default):
@@ -2361,8 +2389,69 @@ class DSREKivyRoot(BoxLayout):
     def _set_output_dir(self, path):
         self.input_output_dir.text = path
 
+
+    def open_diagnostics_dialog(self):
+        try:
+            popup = ModalView(size_hint=(0.94, 0.88), auto_dismiss=True)
+            root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
+            root.add_widget(SectionTitle(text=self.tr('diagnostics_title')))
+
+            lines = list(getattr(self, 'debug_log_lines', []))[-200:]
+            text = "\n".join(lines).strip()
+            if not text:
+                text = self.tr('diagnostics_empty')
+            text = f"{self.tr('diagnostics_note')}\nfflog: {FFLOG_FILE}\n\n{text}"
+
+            log_box = TextInput(
+                text=text,
+                readonly=True,
+                multiline=True,
+                size_hint=(1, 1),
+                background_normal="",
+                background_active="",
+                background_color=MATERIAL["surface_alt"],
+                foreground_color=MATERIAL["text"],
+                cursor_color=(0, 0, 0, 0),
+                padding=[dp(10), dp(10), dp(10), dp(10)],
+                font_size="12sp",
+            )
+            font = get_ui_font()
+            if font:
+                log_box.font_name = font
+            root.add_widget(log_box)
+
+            row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+            clear = MaterialButton(text=self.tr('diagnostics_clear'), kind="flat")
+            close = MaterialButton(text=self.tr('diagnostics_close'), kind="primary")
+
+            def _clear(*_):
+                self.debug_log_lines = []
+                log_box.text = self.tr('diagnostics_cleared')
+
+            clear.bind(on_release=_clear)
+            close.bind(on_release=lambda *_: popup.dismiss())
+            row.add_widget(clear)
+            row.add_widget(close)
+            root.add_widget(row)
+            popup.add_widget(root)
+            popup.open()
+        except Exception as exc:
+            write_fflog("Diagnostics dialog failed", str(exc), exc)
+
+
     def write_log(self, message):
         clean = strip_status_text(message)
+        if not clean:
+            return
+        try:
+            if not hasattr(self, 'debug_log_lines'):
+                self.debug_log_lines = []
+            stamp = time.strftime('%H:%M:%S')
+            self.debug_log_lines.append(f"{stamp} {clean}")
+            if len(self.debug_log_lines) > 200:
+                self.debug_log_lines = self.debug_log_lines[-200:]
+        except Exception:
+            pass
 
     def thread_log(self, message):
         clean = strip_status_text(message)
