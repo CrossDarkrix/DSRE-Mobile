@@ -25,7 +25,7 @@ from kivy.uix.label import Label
 from kivy.uix.modalview import ModalView
 from kivy.uix.progressbar import ProgressBar
 from kivy.uix.scrollview import ScrollView
-from kivy.uix.spinner import Spinner
+from kivy.uix.spinner import Spinner, SpinnerOption
 from kivy.uix.textinput import TextInput
 
 APP_NAME = "DSRE Kivy Mobile CDLL v1.7-streaming"
@@ -1833,6 +1833,31 @@ class SmallLabel(MaterialLabel):
         kwargs.setdefault("height", dp(20))
         super().__init__(**kwargs)
 
+class MaterialSpinnerOption(SpinnerOption):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.background_normal = ""
+        self.background_down = ""
+        self.background_color = MATERIAL["surface_alt"]
+        self.color = MATERIAL["text"]
+        self.font_size = kwargs.get("font_size", "13sp")
+        font = get_ui_font()
+        if font:
+            self.font_name = font
+
+class MaterialSpinner(Spinner):
+    def __init__(self, **kwargs):
+        kwargs.setdefault("option_cls", MaterialSpinnerOption)
+        super().__init__(**kwargs)
+        self.option_cls = MaterialSpinnerOption
+        font = get_ui_font()
+        if font:
+            self.font_name = font
+        self.background_normal = ""
+        self.background_down = ""
+        self.background_color = MATERIAL["surface_alt"]
+        self.color = MATERIAL["text"]
+
 class _FileChooserListView(FileChooserListView):
     def __init__(self, **kwargs):
         font = get_ui_font()
@@ -1948,7 +1973,7 @@ class DSREKivyRoot(BoxLayout):
         self.input_decay = self._param(param_card, "Strength 0.1-1.0", "0.47")
         self.input_sr = self._param(param_card, "Sample Rate", "48000")
         param_card.add_widget(SmallLabel(text="Format"))
-        self.input_format = Spinner(text="ALAC", values=("ALAC", "FLAC", "MP3"), size_hint_y=None, height=dp(40), background_normal="", background_color=MATERIAL["surface_alt"], color=MATERIAL["text"])
+        self.input_format = MaterialSpinner(text="ALAC", values=("ALAC", "FLAC", "MP3"), size_hint_y=None, height=dp(40), background_normal="", background_color=MATERIAL["surface_alt"], color=MATERIAL["text"])
         font = get_ui_font()
         if font:
             self.input_format.font_name = font
@@ -1958,7 +1983,7 @@ class DSREKivyRoot(BoxLayout):
         self.input_chunk_threshold = self._param(param_card, "Chunk MB", "150")
         self.input_dsp_context = self._param(param_card, "DSP Context sec", "0.04")
         param_card.add_widget(SmallLabel(text="Preset"))
-        self.input_preset = Spinner(
+        self.input_preset = MaterialSpinner(
             text=DEFAULT_PRESET_NAME,
             values=tuple(DEFAULT_AUDIO_PRESETS.keys()),
             size_hint_y=None,
@@ -2207,7 +2232,7 @@ class DSREKivyRoot(BoxLayout):
             popup = ModalView(size_hint=(0.90, None), height=dp(220), auto_dismiss=True)
             root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
             root.add_widget(SectionTitle(text="プリセット削除"))
-            spinner = Spinner(
+            spinner = MaterialSpinner(
                 text=deletable[0],
                 values=tuple(deletable),
                 size_hint_y=None,
