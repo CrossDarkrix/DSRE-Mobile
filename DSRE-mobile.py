@@ -205,6 +205,26 @@ PERMISSION_UI_TEXT: Dict[str, Dict[str, str]] = {
 for _lang, _texts in PERMISSION_UI_TEXT.items():
     UI_TEXT.setdefault(_lang, {}).update(_texts)
 
+
+PREPROCESS_NOTICE_UI_TEXT: Dict[str, Dict[str, str]] = {
+    "ja": {
+        "preprocess_notice_title": "処理前の注意",
+        "preprocess_notice_message": "DSREは音声ファイルの解析・DSP処理・再エンコードを行うため、端末に継続的なCPU負荷・発熱・バッテリー消費が発生します。低スペック端末や高温状態では、処理が遅くなったり、OSによりアプリが停止される場合があります。\n\n初回は短い曲または少数ファイルで試し、端末が熱くなりすぎる場合はキャンセルしてください。重要なファイルは事前にバックアップしてから実行してください。",
+        "preprocess_notice_accept": "理解して開始",
+        "preprocess_notice_later": "キャンセル",
+        "preprocess_notice_saved": "処理前の注意を確認しました",
+    },
+    "en": {
+        "preprocess_notice_title": "Before processing",
+        "preprocess_notice_message": "DSRE analyzes, processes, and re-encodes audio files, which can create sustained CPU load, heat, and battery usage. On lower-end devices or when the device is already hot, processing may slow down or Android may stop the app.\n\nFor the first run, try a short track or a small number of files. Cancel if the device becomes too hot. Back up important files before processing.",
+        "preprocess_notice_accept": "I understand, start",
+        "preprocess_notice_later": "Cancel",
+        "preprocess_notice_saved": "Pre-processing notice acknowledged",
+    },
+}
+for _lang, _texts in PREPROCESS_NOTICE_UI_TEXT.items():
+    UI_TEXT.setdefault(_lang, {}).update(_texts)
+
 def normalize_language(value: Any) -> str:
     value = str(value or "ja").strip().lower()
     if value in ("en", "english"):
@@ -2075,6 +2095,7 @@ class DSREKivyRoot(BoxLayout):
         self.language = load_initial_language(self.config_path)
         self.presets = copy_default_presets()
         self.active_preset_name = DEFAULT_PRESET_NAME
+        self.safety_notice_accepted = False
         Window.minimum_width = 360
         Window.minimum_height = 560
         Window.clearcolor = MATERIAL["bg"]
@@ -2123,20 +2144,35 @@ class DSREKivyRoot(BoxLayout):
             return
         self.show_audio_permission_prompt(on_granted)
 
+
     def show_audio_permission_prompt(self, on_granted):
         try:
-            popup = ModalView(size_hint=(0.90, None), height=dp(250), auto_dismiss=True)
+            popup = ModalView(size_hint=(0.90, 0.78), auto_dismiss=True)
             root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
             root.add_widget(SectionTitle(text=self.tr('permission_audio_title')))
-            root.add_widget(
-                MaterialLabel(
-                    text=self.tr('permission_audio_message'),
-                    size_hint_y=None,
-                    height=dp(118),
-                    halign="left",
-                    valign="middle",
-                )
+
+            message_scroll = ScrollView(do_scroll_x=False, size_hint=(1, 1))
+            message_label = MaterialLabel(
+                text=self.tr('permission_audio_message'),
+                size_hint_y=None,
+                height=dp(1),
+                halign="left",
+                valign="top",
             )
+
+            def _sync_permission_label_width(_instance, width):
+                message_label.text_size = (max(1, width - dp(8)), None)
+                message_label.texture_update()
+                message_label.height = max(dp(90), message_label.texture_size[1] + dp(16))
+
+            def _sync_permission_label_height(_instance, texture_size):
+                message_label.height = max(dp(90), texture_size[1] + dp(16))
+
+            message_label.bind(width=_sync_permission_label_width)
+            message_label.bind(texture_size=_sync_permission_label_height)
+            message_scroll.add_widget(message_label)
+            root.add_widget(message_scroll)
+
             row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
             cancel = MaterialButton(text=self.tr('cancel'), kind="flat")
             request = MaterialButton(text=self.tr('permission_request'), kind="primary")
@@ -2168,6 +2204,7 @@ class DSREKivyRoot(BoxLayout):
             root.add_widget(row)
             popup.add_widget(root)
             popup.open()
+            Clock.schedule_once(lambda _dt: _sync_permission_label_width(message_label, message_scroll.width), 0)
         except Exception as exc:
             write_fflog("Audio permission prompt failed", str(exc), exc)
             request_required_audio_permissions(lambda granted: Clock.schedule_once(lambda _dt: on_granted() if granted else None, 0))
@@ -2564,6 +2601,81 @@ class DSREKivyRoot(BoxLayout):
             cancel.disabled = not is_processing
             cancel.opacity = 1.0 if is_processing else 0.45
 
+
+
+    def show_preprocess_notice(self):
+        try:
+            popup = ModalView(size_hint=(0.92, 0.86), auto_dismiss=False)
+            root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
+            root.add_widget(SectionTitle(text=self.tr('preprocess_notice_title')))
+
+            message_scroll = ScrollView(do_scroll_x=False, size_hint=(1, 1))
+            message_label = MaterialLabel(
+                text=self.tr('preprocess_notice_message'),
+                size_hint_y=None,
+                height=dp(1),
+                halign="left",
+                valign="top",
+            )
+
+            def _sync_notice_label_width(_instance, width):
+                message_label.text_size = (max(1, width - dp(8)), None)
+                message_label.texture_update()
+                message_label.height = max(dp(120), message_label.texture_size[1] + dp(16))
+
+            def _sync_notice_label_height(_instance, texture_size):
+                message_label.height = max(dp(120), texture_size[1] + dp(16))
+
+            message_label.bind(width=_sync_notice_label_width)
+            message_label.bind(texture_size=_sync_notice_label_height)
+            message_scroll.add_widget(message_label)
+            root.add_widget(message_scroll)
+
+            row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+            cancel = MaterialButton(text=self.tr('preprocess_notice_later'), kind="flat")
+            proceed = MaterialButton(text=self.tr('preprocess_notice_accept'), kind="primary")
+
+            def _cancel(*_):
+                popup.dismiss()
+
+            def _proceed(*_):
+                popup.dismiss()
+                self.safety_notice_accepted = True
+                self.persist_safety_notice_ack()
+                self.write_log(self.tr('preprocess_notice_saved'))
+                self.start_processing()
+
+            cancel.bind(on_release=_cancel)
+            proceed.bind(on_release=_proceed)
+            row.add_widget(cancel)
+            row.add_widget(proceed)
+            root.add_widget(row)
+            popup.add_widget(root)
+            popup.open()
+            Clock.schedule_once(lambda _dt: _sync_notice_label_width(message_label, message_scroll.width), 0)
+        except Exception as exc:
+            write_fflog("Preprocess notice popup failed", str(exc), exc)
+            self.safety_notice_accepted = True
+            self.start_processing()
+
+    def persist_safety_notice_ack(self):
+        try:
+            os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+            config = {}
+            if os.path.exists(self.config_path):
+                try:
+                    with open(self.config_path, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        config = loaded
+                except Exception:
+                    config = {}
+            config["safety_notice_accepted"] = bool(getattr(self, "safety_notice_accepted", False))
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+        except Exception as exc:
+            write_fflog("Failed to persist safety_notice_accepted", str(exc), exc)
+
     def start_processing(self):
         if self.processing:
             self.write_log(self.tr('already_processing'))
@@ -2576,6 +2688,10 @@ class DSREKivyRoot(BoxLayout):
         except Exception as e:
             self.write_log(f"{self.tr('invalid_parameters')}: {e}")
             return
+        if not bool(getattr(self, 'safety_notice_accepted', False)):
+            self.show_preprocess_notice()
+            return
+
         output_dir = os.path.abspath(os.path.expanduser(self.input_output_dir.text.strip() or os.path.join(EXTERNAL_STORAGE, "Documents", "enhanced_output")))
         os.makedirs(output_dir, exist_ok=True)
         self.processing = True
@@ -2751,6 +2867,7 @@ class DSREKivyRoot(BoxLayout):
                 "stream_chunk_seconds": getattr(self, "input_stream_chunk_seconds", None).text if getattr(self, "input_stream_chunk_seconds", None) else "12.0",
                 "gc_interval_chunks": getattr(self, "input_gc_interval_chunks", None).text if getattr(self, "input_gc_interval_chunks", None) else "8",
                 "dsp_context": getattr(self, "input_dsp_context", None).text if getattr(self, "input_dsp_context", None) else "0.04",
+                "safety_notice_accepted": bool(getattr(self, "safety_notice_accepted", False)),
                 "output_dir": self.input_output_dir.text,
                 "last_directory": self.input_directory.text,
                 "last_file": self.input_file.text,
@@ -2788,6 +2905,7 @@ class DSREKivyRoot(BoxLayout):
             with open(self.config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
             self.language = normalize_language(config.get("language", getattr(self, "language", "ja")))
+            self.safety_notice_accepted = bool(config.get('safety_notice_accepted', False))
             if hasattr(self, "input_language"):
                 self.input_language.text = self.language_label()
 
