@@ -181,6 +181,30 @@ FILECHOOSER_UI_TEXT: Dict[str, Dict[str, str]] = {
 for _lang, _texts in FILECHOOSER_UI_TEXT.items():
     UI_TEXT.setdefault(_lang, {}).update(_texts)
 
+
+PERMISSION_UI_TEXT: Dict[str, Dict[str, str]] = {
+    "ja": {
+        "permission_audio_title": "音楽ファイルへのアクセス許可",
+        "permission_audio_message": "音楽ファイルを表示・処理するには、端末の音楽/ストレージへのアクセス許可が必要です。許可しない場合、参照画面に音楽ファイルが表示されないことがあります。",
+        "permission_request": "許可をリクエスト",
+        "permission_requesting": "権限をリクエストしています...",
+        "permission_audio_granted": "音楽ファイルへのアクセスが許可されました",
+        "permission_audio_denied": "音楽ファイルへのアクセス許可がありません",
+        "permission_audio_denied_detail": "権限が許可されていないため、音楽ファイルを表示できない場合があります。Androidのアプリ情報 > 権限 から音楽/ストレージの許可を有効にしてください。",
+    },
+    "en": {
+        "permission_audio_title": "Music file access permission",
+        "permission_audio_message": "DSRE needs access to music/storage to show and process audio files. Without this permission, audio files may not appear in the file picker.",
+        "permission_request": "Request Permission",
+        "permission_requesting": "Requesting permission...",
+        "permission_audio_granted": "Music file access granted",
+        "permission_audio_denied": "Music file access is not granted",
+        "permission_audio_denied_detail": "Audio files may not be visible because the permission was not granted. Enable Music/Storage permission from Android app info > Permissions.",
+    },
+}
+for _lang, _texts in PERMISSION_UI_TEXT.items():
+    UI_TEXT.setdefault(_lang, {}).update(_texts)
+
 def normalize_language(value: Any) -> str:
     value = str(value or "ja").strip().lower()
     if value in ("en", "english"):
@@ -200,6 +224,71 @@ def load_initial_language(config_path: str) -> str:
 def ui_text(language: str, key: str) -> str:
     lang = normalize_language(language)
     return UI_TEXT.get(lang, UI_TEXT["ja"]).get(key, UI_TEXT["ja"].get(key, key))
+
+
+def is_android_runtime() -> bool:
+    return sys.platform == "android" or bool(os.environ.get("ANDROID_ARGUMENT"))
+
+
+def get_android_api_level() -> int:
+    if not is_android_runtime():
+        return 0
+    try:
+        from jnius import autoclass
+        return int(autoclass("android.os.Build$VERSION").SDK_INT)
+    except Exception:
+        return 0
+
+
+def get_required_audio_permissions() -> List[str]:
+    """Return runtime permissions needed to list/read shared audio files."""
+    if not is_android_runtime():
+        return []
+    api = get_android_api_level()
+    if api >= 33:
+        return ["android.permission.READ_MEDIA_AUDIO"]
+    return ["android.permission.READ_EXTERNAL_STORAGE"]
+
+
+def has_android_permission(permission: str) -> bool:
+    if not permission or not is_android_runtime():
+        return True
+    try:
+        from android.permissions import check_permission
+        return bool(check_permission(permission))
+    except Exception:
+        return False
+
+
+def has_required_audio_permissions() -> bool:
+    permissions = get_required_audio_permissions()
+    return all(has_android_permission(permission) for permission in permissions)
+
+
+def request_required_audio_permissions(callback=None) -> None:
+    """Request audio/storage permissions. callback receives bool granted."""
+    permissions = [p for p in get_required_audio_permissions() if not has_android_permission(p)]
+    if not permissions:
+        if callback:
+            callback(True)
+        return
+    try:
+        from android.permissions import request_permissions
+
+        def _callback(_permissions, grant_results):
+            granted = True
+            try:
+                granted = all(bool(value) for value in grant_results)
+            except Exception:
+                granted = has_required_audio_permissions()
+            if callback:
+                callback(bool(granted))
+
+        request_permissions(permissions, _callback)
+    except Exception as exc:
+        write_fflog("Android audio permission request failed", str(exc), exc, extra={"permissions": permissions})
+        if callback:
+            callback(False)
 
 def write_fflog(
     title: str,
@@ -1681,12 +1770,12 @@ class DSREProcessor:
 
         native = get_native_audio()
         if not getattr(native, "streaming_available", False):
-            self.logs(f"[red]{self.tr("streaming_api_missing")}[/]")
+            self.logs(f"[red]{self.tr('streaming_api_missing')}[/]")
             return
 
         for idx, in_path in enumerate(self.files, start=1):
             if self.abort_cb():
-                self.logs(f"[yellow]{self.tr("processing_aborted")}[/]")
+                self.logs(f"[yellow]{self.tr('processing_aborted')}[/]")
                 break
 
             fname = os.path.basename(in_path)
@@ -1728,7 +1817,7 @@ class DSREProcessor:
                         fmt=self.params["format"],
                     )
 
-                    self.logs(f"[green]{self.tr("saved")}:[/] {out_path}")
+                    self.logs(f"[green]{self.tr('saved')}:[/] {out_path}")
                     self.processing_stats["processed_files"] += 1
                     self.processing_stats["processed_size_mb"] += file_size_mb
                     break
@@ -1757,7 +1846,7 @@ class DSREProcessor:
                     force_release_memory()
 
                     if self.abort_cb():
-                        self.logs(f"[yellow]{self.tr("processing_aborted")}[/]")
+                        self.logs(f"[yellow]{self.tr('processing_aborted')}[/]")
                         break
 
                     if retry_count <= max_retries and error_type != "fatal":
@@ -1768,7 +1857,7 @@ class DSREProcessor:
                         time.sleep(1)
                     else:
                         self.logs(f"[red][Error][/] {fname}: {err}")
-                        self.logs(self.tr("details_check").format(path=FFLOG_FILE))
+                        self.logs(self.tr('details_check').format(path=FFLOG_FILE))
                         self.processing_stats["failed_files"] += 1
                         break
 
@@ -1778,7 +1867,7 @@ class DSREProcessor:
             self.stats(dict(self.processing_stats))
             force_release_memory()
 
-        self.logs(f"[bold green]{self.tr("processing_finished")}[/]")
+        self.logs(f"[bold green]{self.tr('processing_finished')}[/]")
 
 MATERIAL = {
     "bg": (0.070, 0.082, 0.102, 1),
@@ -1995,7 +2084,7 @@ class DSREKivyRoot(BoxLayout):
         self.bind(pos=self._sync_bg, size=self._sync_bg)
         self._build_ui()
         self.load_config(log=False)
-        self.update_status(self.tr("ready"))
+        self.update_status(self.tr('ready'))
 
     def _sync_bg(self, *_):
         self._bg.pos = self.pos
@@ -2013,13 +2102,75 @@ class DSREKivyRoot(BoxLayout):
     def on_language_changed(self, spinner, value):
         self.language = self.language_code_from_label(value)
         try:
-            self.status_label.text = self.tr("language_changed_restart")
+            self.status_label.text = self.tr('language_changed_restart')
         except Exception:
             pass
         try:
-            self.write_log(self.tr("language_changed_restart"))
+            self.write_log(self.tr('language_changed_restart'))
         except Exception:
             pass
+
+
+    def open_file_chooser_with_permission(self, select_callback, choose_dir=False):
+        def _open():
+            FileChooserPopup(select_callback, choose_dir=choose_dir).open()
+
+        self.ensure_audio_permission_then(_open)
+
+    def ensure_audio_permission_then(self, on_granted):
+        if not is_android_runtime() or has_required_audio_permissions():
+            on_granted()
+            return
+        self.show_audio_permission_prompt(on_granted)
+
+    def show_audio_permission_prompt(self, on_granted):
+        try:
+            popup = ModalView(size_hint=(0.90, None), height=dp(250), auto_dismiss=True)
+            root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
+            root.add_widget(SectionTitle(text=self.tr('permission_audio_title')))
+            root.add_widget(
+                MaterialLabel(
+                    text=self.tr('permission_audio_message'),
+                    size_hint_y=None,
+                    height=dp(118),
+                    halign="left",
+                    valign="middle",
+                )
+            )
+            row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+            cancel = MaterialButton(text=self.tr('cancel'), kind="flat")
+            request = MaterialButton(text=self.tr('permission_request'), kind="primary")
+
+            def _cancel(*_):
+                popup.dismiss()
+                self.write_log(self.tr('permission_audio_denied'))
+
+            def _request(*_):
+                popup.dismiss()
+                self.status_label.text = self.tr('permission_requesting')
+
+                def _after(granted):
+                    def _ui(_dt):
+                        if granted or has_required_audio_permissions():
+                            self.write_log(self.tr('permission_audio_granted'))
+                            on_granted()
+                        else:
+                            self.write_log(self.tr('permission_audio_denied'))
+                            self.show_alert(self.tr('permission_audio_title'), self.tr('permission_audio_denied_detail'))
+                    Clock.schedule_once(_ui, 0)
+
+                request_required_audio_permissions(_after)
+
+            cancel.bind(on_release=_cancel)
+            request.bind(on_release=_request)
+            row.add_widget(cancel)
+            row.add_widget(request)
+            root.add_widget(row)
+            popup.add_widget(root)
+            popup.open()
+        except Exception as exc:
+            write_fflog("Audio permission prompt failed", str(exc), exc)
+            request_required_audio_permissions(lambda granted: Clock.schedule_once(lambda _dt: on_granted() if granted else None, 0))
 
     def _build_ui(self):
         header = MaterialCard(orientation="vertical", size_hint_y=None, height=dp(70), padding=dp(10))
@@ -2035,38 +2186,38 @@ class DSREKivyRoot(BoxLayout):
         self.add_widget(scroll)
         file_card = MaterialCard(orientation="vertical", size_hint_y=None)
         file_card.bind(minimum_height=file_card.setter("height"))
-        file_card.add_widget(SectionTitle(text=self.tr("input")))
+        file_card.add_widget(SectionTitle(text=self.tr('input')))
         row_file = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
-        self.input_file = MaterialInput(hint_text=self.tr("audio_file_path"))
-        browse_file = MaterialButton(text=self.tr("browse"), kind="flat", size_hint_x=None, width=dp(70))
-        browse_file.bind(on_release=lambda *_: FileChooserPopup(self._set_file_path).open())
+        self.input_file = MaterialInput(hint_text=self.tr('audio_file_path'))
+        browse_file = MaterialButton(text=self.tr('browse'), kind="flat", size_hint_x=None, width=dp(70))
+        browse_file.bind(on_release=lambda *_: self.open_file_chooser_with_permission(self._set_file_path))
         row_file.add_widget(self.input_file)
         row_file.add_widget(browse_file)
         file_card.add_widget(row_file)
-        add_file = MaterialButton(text=self.tr("add_file"), kind="primary")
+        add_file = MaterialButton(text=self.tr('add_file'), kind="primary")
         add_file.bind(on_release=lambda *_: self.handle_add_file())
         file_card.add_widget(add_file)
 
         row_dir = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
-        self.input_directory = MaterialInput(hint_text=self.tr("directory_batch_add"))
-        browse_dir = MaterialButton(text=self.tr("browse"), kind="flat", size_hint_x=None, width=dp(70))
-        browse_dir.bind(on_release=lambda *_: FileChooserPopup(self._set_dir_path, choose_dir=True).open())
+        self.input_directory = MaterialInput(hint_text=self.tr('directory_batch_add'))
+        browse_dir = MaterialButton(text=self.tr('browse'), kind="flat", size_hint_x=None, width=dp(70))
+        browse_dir.bind(on_release=lambda *_: self.open_file_chooser_with_permission(self._set_dir_path, choose_dir=True))
         row_dir.add_widget(self.input_directory)
         row_dir.add_widget(browse_dir)
         file_card.add_widget(row_dir)
-        scan_dir = MaterialButton(text=self.tr("recursive_scan"), kind="primary")
+        scan_dir = MaterialButton(text=self.tr('recursive_scan'), kind="primary")
         scan_dir.bind(on_release=lambda *_: self.handle_scan_directory())
         file_card.add_widget(scan_dir)
         self.file_summary_label = SmallLabel(text="0 files", height=dp(38))
         file_card.add_widget(self.file_summary_label)
-        clear = MaterialButton(text=self.tr("clear_list"), kind="flat")
+        clear = MaterialButton(text=self.tr('clear_list'), kind="flat")
         clear.bind(on_release=lambda *_: self.clear_files())
         file_card.add_widget(clear)
         content.add_widget(file_card)
         param_card = MaterialCard(orientation="vertical", size_hint_y=None)
         param_card.bind(minimum_height=param_card.setter("height"))
-        param_card.add_widget(SectionTitle(text=self.tr("settings")))
-        param_card.add_widget(SmallLabel(text=self.tr("language")))
+        param_card.add_widget(SectionTitle(text=self.tr('settings')))
+        param_card.add_widget(SmallLabel(text=self.tr('language')))
         self.input_language = MaterialSpinner(text=self.language_label(), values=("日本語", "English"), size_hint_y=None, height=dp(40), background_normal="", background_color=MATERIAL["surface_alt"], color=MATERIAL["text"])
         font = get_ui_font()
         if font:
@@ -2076,7 +2227,7 @@ class DSREKivyRoot(BoxLayout):
         self.input_m = self._param(param_card, "Harmonic 1-32", "15")
         self.input_decay = self._param(param_card, "Strength 0.1-1.0", "0.47")
         self.input_sr = self._param(param_card, "Sample Rate", "48000")
-        param_card.add_widget(SmallLabel(text=self.tr("format")))
+        param_card.add_widget(SmallLabel(text=self.tr('format')))
         self.input_format = MaterialSpinner(text="ALAC", values=("ALAC", "FLAC", "MP3"), size_hint_y=None, height=dp(40), background_normal="", background_color=MATERIAL["surface_alt"], color=MATERIAL["text"])
         font = get_ui_font()
         if font:
@@ -2088,7 +2239,7 @@ class DSREKivyRoot(BoxLayout):
         self.input_stream_chunk_seconds = self._param(param_card, "Stream Chunk sec", "12.0")
         self.input_gc_interval_chunks = self._param(param_card, "GC interval chunks", "8")
         self.input_dsp_context = self._param(param_card, "DSP Context sec", "0.04")
-        param_card.add_widget(SmallLabel(text=self.tr("preset")))
+        param_card.add_widget(SmallLabel(text=self.tr('preset')))
         self.input_preset = MaterialSpinner(
             text=DEFAULT_PRESET_NAME,
             values=tuple(DEFAULT_AUDIO_PRESETS.keys()),
@@ -2104,9 +2255,9 @@ class DSREKivyRoot(BoxLayout):
         param_card.add_widget(self.input_preset)
 
         preset_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
-        apply_preset = MaterialButton(text=self.tr("apply_preset"), kind="primary")
-        save_preset = MaterialButton(text=self.tr("save_preset"), kind="secondary")
-        delete_preset = MaterialButton(text=self.tr("delete_preset"), kind="flat")
+        apply_preset = MaterialButton(text=self.tr('apply_preset'), kind="primary")
+        save_preset = MaterialButton(text=self.tr('save_preset'), kind="secondary")
+        delete_preset = MaterialButton(text=self.tr('delete_preset'), kind="flat")
         apply_preset.bind(on_release=lambda *_: self.apply_selected_preset())
         save_preset.bind(on_release=lambda *_: self.open_save_preset_dialog())
         delete_preset.bind(on_release=lambda *_: self.open_delete_preset_dialog())
@@ -2114,21 +2265,21 @@ class DSREKivyRoot(BoxLayout):
         preset_row.add_widget(save_preset)
         preset_row.add_widget(delete_preset)
         param_card.add_widget(preset_row)
-        param_card.add_widget(SmallLabel(text=self.tr("output_directory")))
+        param_card.add_widget(SmallLabel(text=self.tr('output_directory')))
         row_out = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
         if os.getenv('EXTERNAL_STORAGE'):
             out = os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents")
         else:
             out = os.path.expanduser('~')
         self.input_output_dir = MaterialInput(text=os.path.join(out, "enhanced_output"))
-        browse_out = MaterialButton(text=self.tr("browse"), kind="flat", size_hint_x=None, width=dp(70))
-        browse_out.bind(on_release=lambda *_: FileChooserPopup(self._set_output_dir, choose_dir=True).open())
+        browse_out = MaterialButton(text=self.tr('browse'), kind="flat", size_hint_x=None, width=dp(70))
+        browse_out.bind(on_release=lambda *_: self.open_file_chooser_with_permission(self._set_output_dir, choose_dir=True))
         row_out.add_widget(self.input_output_dir)
         row_out.add_widget(browse_out)
         param_card.add_widget(row_out)
         cfg_row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
-        save = MaterialButton(text=self.tr("save_settings"), kind="secondary")
-        load = MaterialButton(text=self.tr("load_settings"), kind="flat")
+        save = MaterialButton(text=self.tr('save_settings'), kind="secondary")
+        load = MaterialButton(text=self.tr('load_settings'), kind="flat")
         save.bind(on_release=lambda *_: self.save_config())
         load.bind(on_release=lambda *_: self.load_config(log=True))
         cfg_row.add_widget(save)
@@ -2137,11 +2288,11 @@ class DSREKivyRoot(BoxLayout):
         content.add_widget(param_card)
         proc_card = MaterialCard(orientation="vertical", size_hint_y=None)
         proc_card.bind(minimum_height=proc_card.setter("height"))
-        proc_card.add_widget(SectionTitle(text=self.tr("processing")))
+        proc_card.add_widget(SectionTitle(text=self.tr('processing')))
         action_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
-        self.start_button = MaterialButton(text=self.tr("start"), kind="primary")
-        self.cancel_button = MaterialButton(text=self.tr("cancel"), kind="danger")
-        self.retry_button = MaterialButton(text=self.tr("retry"), kind="flat")
+        self.start_button = MaterialButton(text=self.tr('start'), kind="primary")
+        self.cancel_button = MaterialButton(text=self.tr('cancel'), kind="danger")
+        self.retry_button = MaterialButton(text=self.tr('retry'), kind="flat")
         self.start_button.bind(on_release=lambda *_: self.start_processing())
         self.cancel_button.bind(on_release=lambda *_: self.cancel_processing())
         self.retry_button.bind(on_release=lambda *_: self.start_processing())
@@ -2150,13 +2301,13 @@ class DSREKivyRoot(BoxLayout):
         action_row.add_widget(self.retry_button)
         proc_card.add_widget(action_row)
         self.update_action_buttons()
-        proc_card.add_widget(SmallLabel(text=self.tr("current_file")))
+        proc_card.add_widget(SmallLabel(text=self.tr('current_file')))
         self.file_bar = ProgressBar(max=100, value=0, size_hint_y=None, height=dp(14))
         proc_card.add_widget(self.file_bar)
-        proc_card.add_widget(SmallLabel(text=self.tr("overall")))
+        proc_card.add_widget(SmallLabel(text=self.tr('overall')))
         self.overall_bar = ProgressBar(max=100, value=0, size_hint_y=None, height=dp(14))
         proc_card.add_widget(self.overall_bar)
-        self.status_label = MaterialLabel(text=self.tr("ready"), size_hint_y=None, height=dp(34), font_size="12sp")
+        self.status_label = MaterialLabel(text=self.tr('ready'), size_hint_y=None, height=dp(34), font_size="12sp")
         proc_card.add_widget(self.status_label)
         self.stats_label = MaterialLabel(text="0 files ready", color=MATERIAL["muted"], size_hint_y=None, height=dp(54), font_size="12sp")
         proc_card.add_widget(self.stats_label)
@@ -2206,7 +2357,7 @@ class DSREKivyRoot(BoxLayout):
         if not is_audio_file(path) or path in self.files:
             return False
         self.files.append(path)
-        self.update_status(self.tr("ready"))
+        self.update_status(self.tr('ready'))
         return True
 
     def add_directory_to_list(self, directory, recursive=True):
@@ -2215,7 +2366,7 @@ class DSREKivyRoot(BoxLayout):
         for path in collect_audio_files_from_directory(directory, recursive=recursive):
             if self.add_file_to_list(path):
                 added += 1
-        self.update_status(self.tr("ready"))
+        self.update_status(self.tr('ready'))
         return added
 
     def handle_add_file(self):
@@ -2223,15 +2374,15 @@ class DSREKivyRoot(BoxLayout):
         if self.add_file_to_list(path):
             self.write_log(f"Added: {os.path.basename(path)}")
         else:
-            self.write_log(self.tr("file_add_failed"))
+            self.write_log(self.tr('file_add_failed'))
 
     def handle_scan_directory(self):
         directory = os.path.abspath(os.path.expanduser(self.input_directory.text.strip()))
         if not os.path.isdir(directory):
-            self.write_log(f"{self.tr("directory_not_found")}: {directory}")
+            self.write_log(f"{self.tr('directory_not_found')}: {directory}")
             return
         added = self.add_directory_to_list(directory, recursive=True)
-        self.write_log(self.tr("directory_scan_completed").format(added=added))
+        self.write_log(self.tr('directory_scan_completed').format(added=added))
 
     def current_audio_preset_values(self) -> Dict[str, str]:
         return normalize_preset_values(
@@ -2284,39 +2435,39 @@ class DSREKivyRoot(BoxLayout):
     def apply_selected_preset(self):
         name = getattr(self, "input_preset", None).text if hasattr(self, "input_preset") else DEFAULT_PRESET_NAME
         if name not in self.presets:
-            self.write_log(f"{self.tr("preset_not_found")}: {name}")
+            self.write_log(f"{self.tr('preset_not_found')}: {name}")
             return
         self.active_preset_name = name
         self.apply_audio_preset_values(self.presets[name])
-        self.status_label.text = f"{self.tr("preset_applied")}: {name}"
-        self.write_log(f"[green]{self.tr("preset_applied")}:[/] {name}")
+        self.status_label.text = f"{self.tr('preset_applied')}: {name}"
+        self.write_log(f"[green]{self.tr('preset_applied')}:[/] {name}")
 
     def open_save_preset_dialog(self):
         try:
             popup = ModalView(size_hint=(0.90, None), height=dp(230), auto_dismiss=True)
             root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
-            root.add_widget(SectionTitle(text=self.tr("save_preset")))
+            root.add_widget(SectionTitle(text=self.tr('save_preset')))
             name_input = MaterialInput(text=getattr(self, "input_preset", None).text if hasattr(self, "input_preset") else "New Preset")
-            root.add_widget(SmallLabel(text=self.tr("preset_name")))
+            root.add_widget(SmallLabel(text=self.tr('preset_name')))
             root.add_widget(name_input)
             row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
-            cancel = MaterialButton(text=self.tr("cancel"), kind="flat")
-            save = MaterialButton(text=self.tr("save_preset"), kind="primary")
+            cancel = MaterialButton(text=self.tr('cancel'), kind="flat")
+            save = MaterialButton(text=self.tr('save_preset'), kind="primary")
 
             def _save(*_):
                 name = name_input.text.strip()
                 if not name:
-                    self.write_log(self.tr("preset_name_empty"))
+                    self.write_log(self.tr('preset_name_empty'))
                     return
                 if name in IMMUTABLE_PRESET_NAMES:
-                    self.write_log(self.tr("immutable_preset_overwrite_denied"))
+                    self.write_log(self.tr('immutable_preset_overwrite_denied'))
                     return
                 self.presets[name] = self.current_audio_preset_values()
                 self.active_preset_name = name
                 self.refresh_preset_spinner()
                 self.input_preset.text = name
-                self.write_log(f"[green]{self.tr("preset_saved")}:[/] {name}")
-                self.status_label.text = f"{self.tr("preset_saved")}: {name}"
+                self.write_log(f"[green]{self.tr('preset_saved')}:[/] {name}")
+                self.status_label.text = f"{self.tr('preset_saved')}: {name}"
                 popup.dismiss()
 
             cancel.bind(on_release=lambda *_: popup.dismiss())
@@ -2327,17 +2478,17 @@ class DSREKivyRoot(BoxLayout):
             popup.add_widget(root)
             popup.open()
         except Exception as e:
-            self.write_log(f"{self.tr("open_save_preset_failed")}: {e}")
+            self.write_log(f"{self.tr('open_save_preset_failed')}: {e}")
 
     def open_delete_preset_dialog(self):
         try:
             deletable = [name for name in sorted(self.presets.keys()) if name not in IMMUTABLE_PRESET_NAMES]
             if not deletable:
-                self.write_log(self.tr("no_user_preset_to_delete"))
+                self.write_log(self.tr('no_user_preset_to_delete'))
                 return
             popup = ModalView(size_hint=(0.90, None), height=dp(220), auto_dismiss=True)
             root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
-            root.add_widget(SectionTitle(text=self.tr("delete_preset")))
+            root.add_widget(SectionTitle(text=self.tr('delete_preset')))
             spinner = MaterialSpinner(
                 text=deletable[0],
                 values=tuple(deletable),
@@ -2352,21 +2503,21 @@ class DSREKivyRoot(BoxLayout):
                 spinner.font_name = font
             root.add_widget(spinner)
             row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
-            cancel = MaterialButton(text=self.tr("cancel"), kind="flat")
-            delete = MaterialButton(text=self.tr("delete_preset"), kind="danger")
+            cancel = MaterialButton(text=self.tr('cancel'), kind="flat")
+            delete = MaterialButton(text=self.tr('delete_preset'), kind="danger")
 
             def _delete(*_):
                 name = spinner.text
                 if name in IMMUTABLE_PRESET_NAMES:
-                    self.write_log(self.tr("immutable_preset_delete_denied"))
+                    self.write_log(self.tr('immutable_preset_delete_denied'))
                     return
                 if name in self.presets:
                     del self.presets[name]
                     if self.active_preset_name == name:
                         self.active_preset_name = DEFAULT_PRESET_NAME
                     self.refresh_preset_spinner()
-                    self.write_log(f"[yellow]{self.tr("preset_deleted")}:[/] {name}")
-                    self.status_label.text = f"{self.tr("preset_deleted")}: {name}"
+                    self.write_log(f"[yellow]{self.tr('preset_deleted')}:[/] {name}")
+                    self.status_label.text = f"{self.tr('preset_deleted')}: {name}"
                 popup.dismiss()
 
             cancel.bind(on_release=lambda *_: popup.dismiss())
@@ -2377,7 +2528,7 @@ class DSREKivyRoot(BoxLayout):
             popup.add_widget(root)
             popup.open()
         except Exception as e:
-            self.write_log(f"{self.tr("open_delete_preset_failed")}: {e}")
+            self.write_log(f"{self.tr('open_delete_preset_failed')}: {e}")
 
     def read_params(self):
         fmt = (self.input_format.text.strip() or "ALAC").upper()
@@ -2415,15 +2566,15 @@ class DSREKivyRoot(BoxLayout):
 
     def start_processing(self):
         if self.processing:
-            self.write_log(self.tr("already_processing"))
+            self.write_log(self.tr('already_processing'))
             return
         if not self.files:
-            self.write_log(self.tr("no_files_selected"))
+            self.write_log(self.tr('no_files_selected'))
             return
         try:
             params = self.read_params()
         except Exception as e:
-            self.write_log(f"{self.tr("invalid_parameters")}: {e}")
+            self.write_log(f"{self.tr('invalid_parameters')}: {e}")
             return
         output_dir = os.path.abspath(os.path.expanduser(self.input_output_dir.text.strip() or os.path.join(EXTERNAL_STORAGE, "Documents", "enhanced_output")))
         os.makedirs(output_dir, exist_ok=True)
@@ -2536,17 +2687,17 @@ class DSREKivyRoot(BoxLayout):
             self.status_label.text = "Cancel requested"
             
         else:
-            self.write_log(self.tr("no_active_processing"))
+            self.write_log(self.tr('no_active_processing'))
 
     def clear_files(self):
         if self.processing:
-            self.write_log(self.tr("cannot_clear_processing"))
+            self.write_log(self.tr('cannot_clear_processing'))
             return
         self.files = []
         self.file_bar.value = 0
         self.overall_bar.value = 0
         
-        self.update_status(self.tr("ready"))
+        self.update_status(self.tr('ready'))
 
     def show_alert(self, title: str, message: str):
         try:
@@ -2606,17 +2757,17 @@ class DSREKivyRoot(BoxLayout):
             }
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-            self.write_log(f"[green]{self.tr("settings_saved")}:[/] {self.config_path}")
-            self.status_label.text = self.tr("settings_saved")
-            self.show_alert(self.tr("settings_save_title"), f"{self.tr("settings_written")}\n{self.config_path}")
+            self.write_log(f"[green]{self.tr('settings_saved')}:[/] {self.config_path}")
+            self.status_label.text = self.tr('settings_saved')
+            self.show_alert(self.tr('settings_save_title'), f"{self.tr('settings_written')}\n{self.config_path}")
         except Exception as e:
-            self.write_log(f"[red]{self.tr("settings_save_failed")}:[/] {e}")
+            self.write_log(f"[red]{self.tr('settings_save_failed')}:[/] {e}")
             try:
-                self.status_label.text = self.tr("settings_save_failed")
+                self.status_label.text = self.tr('settings_save_failed')
             except Exception:
                 pass
             try:
-                self.show_alert(self.tr("settings_save_error_title"), f"{self.tr("settings_save_failed")}\n{e}")
+                self.show_alert(self.tr('settings_save_error_title'), f"{self.tr('settings_save_failed')}\n{e}")
             except Exception:
                 pass
 
@@ -2629,9 +2780,9 @@ class DSREKivyRoot(BoxLayout):
                 self.apply_audio_preset_values(DEFAULT_AUDIO_PRESETS[DEFAULT_PRESET_NAME])
                 self.refresh_preset_spinner()
                 if log:
-                    self.write_log(f"{self.tr("settings_file_missing")}: {self.config_path}")
-                    self.status_label.text = self.tr("settings_file_missing")
-                    self.show_alert(self.tr("settings_load_title"), f"{self.tr("settings_file_missing")}\n{self.config_path}")
+                    self.write_log(f"{self.tr('settings_file_missing')}: {self.config_path}")
+                    self.status_label.text = self.tr('settings_file_missing')
+                    self.show_alert(self.tr('settings_load_title'), f"{self.tr('settings_file_missing')}\n{self.config_path}")
                 return
 
             with open(self.config_path, "r", encoding="utf-8") as f:
@@ -2683,18 +2834,18 @@ class DSREKivyRoot(BoxLayout):
             self.input_file.text = str(config.get("last_file", ""))
 
             if log:
-                self.write_log(f"[green]{self.tr("settings_loaded")}:[/] {self.config_path}")
-                self.status_label.text = self.tr("settings_loaded")
-                self.show_alert(self.tr("settings_load_title"), f"{self.tr("settings_loaded")}\n{self.config_path}")
+                self.write_log(f"[green]{self.tr('settings_loaded')}:[/] {self.config_path}")
+                self.status_label.text = self.tr('settings_loaded')
+                self.show_alert(self.tr('settings_load_title'), f"{self.tr('settings_loaded')}\n{self.config_path}")
         except Exception as e:
             if log:
-                self.write_log(f"[red]{self.tr("settings_load_failed")}:[/] {e}")
+                self.write_log(f"[red]{self.tr('settings_load_failed')}:[/] {e}")
             try:
-                self.status_label.text = self.tr("settings_load_failed")
+                self.status_label.text = self.tr('settings_load_failed')
             except Exception:
                 pass
             try:
-                self.show_alert(self.tr("settings_load_error_title"), f"{self.tr("settings_load_failed")}\n{e}")
+                self.show_alert(self.tr('settings_load_error_title'), f"{self.tr('settings_load_failed')}\n{e}")
             except Exception:
                 pass
 
