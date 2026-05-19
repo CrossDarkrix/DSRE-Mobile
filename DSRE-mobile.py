@@ -42,7 +42,10 @@ APP_NAME = "DSRE Kivy Mobile CDLL v1.7-streaming"
 APP_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXTERNAL_STORAGE = os.getenv("EXTERNAL_STORAGE") or os.path.expanduser("~")
 DSRE_DOCUMENT_DIR = os.path.join(EXTERNAL_STORAGE, "Documents", "DSRE")
-os.makedirs(DSRE_DOCUMENT_DIR, exist_ok=True)
+try:
+    os.makedirs(DSRE_DOCUMENT_DIR, exist_ok=True)
+except Exception:
+    pass
 CONFIG_FILE = os.path.join(DSRE_DOCUMENT_DIR, "dsre_kivy_config.json")
 FFLOG_FILE = os.path.join(DSRE_DOCUMENT_DIR, "fflog.txt")
 
@@ -249,6 +252,30 @@ DIAGNOSTIC_UI_TEXT: Dict[str, Dict[str, str]] = {
 for _lang, _texts in DIAGNOSTIC_UI_TEXT.items():
     UI_TEXT.setdefault(_lang, {}).update(_texts)
 
+
+ALL_FILES_ACCESS_UI_TEXT: Dict[str, Dict[str, str]] = {
+    "ja": {
+        "all_files_access_title": "すべてのファイルへのアクセス",
+        "all_files_access_message": "DSREはMusic/DSREへ音楽ファイルを直接保存し、Documents/DSREへ設定ファイルや診断ログを保存します。\n\nこの保存方式を使うには、Androidの特別なアプリアクセスで「すべてのファイルへのアクセス」を許可してください。\n\n設定画面でDSREの許可を有効にしたあと、アプリへ戻ってもう一度「開始」を押してください。",
+        "all_files_access_open_settings": "設定を開く",
+        "all_files_access_required": "すべてのファイルへのアクセスが必要です",
+        "all_files_access_granted": "すべてのファイルへのアクセスが許可されています",
+        "all_files_access_not_granted": "すべてのファイルへのアクセスがまだ許可されていません",
+        "music_output_directory": "Music/DSREへ保存します",
+    },
+    "en": {
+        "all_files_access_title": "All files access",
+        "all_files_access_message": "DSRE saves enhanced music files directly to Music/DSRE and stores settings/diagnostic logs in Documents/DSRE.\n\nTo use this save location, enable Android's special app access: All files access.\n\nAfter enabling the permission for DSRE in Settings, return to the app and press Start again.",
+        "all_files_access_open_settings": "Open Settings",
+        "all_files_access_required": "All files access is required",
+        "all_files_access_granted": "All files access is granted",
+        "all_files_access_not_granted": "All files access is not granted yet",
+        "music_output_directory": "Saving to Music/DSRE",
+    },
+}
+for _lang, _texts in ALL_FILES_ACCESS_UI_TEXT.items():
+    UI_TEXT.setdefault(_lang, {}).update(_texts)
+
 def normalize_language(value: Any) -> str:
     value = str(value or "ja").strip().lower()
     if value in ("en", "english"):
@@ -333,6 +360,51 @@ def request_required_audio_permissions(callback=None) -> None:
         write_fflog("Android audio permission request failed", str(exc), exc, extra={"permissions": permissions})
         if callback:
             callback(False)
+
+
+def get_shared_music_dsre_dir() -> str:
+    base = os.getenv("EXTERNAL_STORAGE") or "/storage/emulated/0"
+    return os.path.join(base, "Music", "DSRE")
+
+
+def is_all_files_access_granted() -> bool:
+    if not is_android_runtime():
+        return True
+    try:
+        api = get_android_api_level()
+        if api and api < 30:
+            return True
+        from jnius import autoclass
+        Environment = autoclass("android.os.Environment")
+        return bool(Environment.isExternalStorageManager())
+    except Exception as exc:
+        write_fflog("Check MANAGE_EXTERNAL_STORAGE failed", str(exc), exc)
+        return False
+
+
+def open_all_files_access_settings() -> bool:
+    if not is_android_runtime():
+        return False
+    try:
+        from jnius import autoclass
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        Intent = autoclass("android.content.Intent")
+        Settings = autoclass("android.provider.Settings")
+        Uri = autoclass("android.net.Uri")
+        activity = PythonActivity.mActivity
+        package_name = activity.getPackageName()
+        try:
+            intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+            intent.setData(Uri.parse("package:" + package_name))
+            activity.startActivity(intent)
+            return True
+        except Exception:
+            intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+            activity.startActivity(intent)
+            return True
+    except Exception as exc:
+        write_fflog("Open all files access settings failed", str(exc), exc)
+        return False
 
 def write_fflog(
     title: str,
@@ -2230,6 +2302,56 @@ class DSREKivyRoot(BoxLayout):
             write_fflog("Audio permission prompt failed", str(exc), exc)
             request_required_audio_permissions(lambda granted: Clock.schedule_once(lambda _dt: on_granted() if granted else None, 0))
 
+
+    def show_all_files_access_prompt(self):
+        try:
+            popup = ModalView(size_hint=(0.92, 0.82), auto_dismiss=True)
+            root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
+            root.add_widget(SectionTitle(text=self.tr('all_files_access_title')))
+
+            message_box = TextInput(
+                text=self.tr('all_files_access_message'),
+                readonly=True,
+                multiline=True,
+                size_hint=(1, 1),
+                background_normal="",
+                background_active="",
+                background_color=MATERIAL["surface_alt"],
+                foreground_color=MATERIAL["text"],
+                cursor_color=(0, 0, 0, 0),
+                padding=[dp(10), dp(10), dp(10), dp(10)],
+                font_size="13sp",
+            )
+            font = get_ui_font()
+            if font:
+                message_box.font_name = font
+            root.add_widget(message_box)
+
+            row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+            cancel = MaterialButton(text=self.tr('cancel'), kind="flat")
+            settings = MaterialButton(text=self.tr('all_files_access_open_settings'), kind="primary")
+
+            def _cancel(*_):
+                popup.dismiss()
+                self.write_log(self.tr('all_files_access_not_granted'))
+
+            def _settings(*_):
+                popup.dismiss()
+                opened = open_all_files_access_settings()
+                if not opened:
+                    self.show_alert(self.tr('all_files_access_title'), self.tr('all_files_access_not_granted'))
+
+            cancel.bind(on_release=_cancel)
+            settings.bind(on_release=_settings)
+            row.add_widget(cancel)
+            row.add_widget(settings)
+            root.add_widget(row)
+            popup.add_widget(root)
+            popup.open()
+        except Exception as exc:
+            write_fflog("All files access prompt failed", str(exc), exc)
+            open_all_files_access_settings()
+
     def _build_ui(self):
         header = MaterialCard(orientation="vertical", size_hint_y=None, height=dp(70), padding=dp(10))
         header.add_widget(MaterialLabel(text="DSRE Audio Enhancer", font_size="20sp", bold=True, size_hint_y=None, height=dp(30)))
@@ -2329,7 +2451,7 @@ class DSREKivyRoot(BoxLayout):
             out = os.path.join(os.getenv('EXTERNAL_STORAGE'), "Documents")
         else:
             out = os.path.expanduser('~')
-        self.input_output_dir = MaterialInput(text=os.path.join(out, "enhanced_output"))
+        self.input_output_dir = MaterialInput(text=get_shared_music_dsre_dir())
         browse_out = MaterialButton(text=self.tr('browse'), kind="flat", size_hint_x=None, width=dp(70))
         browse_out.bind(on_release=lambda *_: self.open_file_chooser_with_permission(self._set_output_dir, choose_dir=True))
         row_out.add_widget(self.input_output_dir)
@@ -2772,8 +2894,12 @@ class DSREKivyRoot(BoxLayout):
         if not bool(getattr(self, 'safety_notice_accepted', False)):
             self.show_preprocess_notice()
             return
+        if not is_all_files_access_granted():
+            self.write_log(self.tr('all_files_access_required'))
+            self.show_all_files_access_prompt()
+            return
 
-        output_dir = os.path.abspath(os.path.expanduser(self.input_output_dir.text.strip() or os.path.join(EXTERNAL_STORAGE, "Documents", "enhanced_output")))
+        output_dir = os.path.abspath(os.path.expanduser(self.input_output_dir.text.strip() or get_shared_music_dsre_dir()))
         os.makedirs(output_dir, exist_ok=True)
         self.processing = True
         self.cancel_requested = False
