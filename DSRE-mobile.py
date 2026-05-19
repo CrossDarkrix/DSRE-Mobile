@@ -1,3 +1,13 @@
+"""
+
+DSRE-mobile
+author: CrossDarkRix
+Version: 2.0.7
+support language: ja, en
+
+"""
+
+
 import gc
 import json
 import os
@@ -197,7 +207,6 @@ def write_fflog(
     exc: Optional[BaseException] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Append diagnostics to Documents/DSRE/fflog.txt without crashing the app."""
     try:
         os.makedirs(os.path.dirname(FFLOG_FILE), exist_ok=True)
         with open(FFLOG_FILE, "a", encoding="utf-8") as f:
@@ -220,7 +229,6 @@ def write_fflog(
 
 
 def force_release_memory() -> None:
-    """Best-effort cleanup for Python, NumPy and native heap pressure."""
     try:
         gc.collect()
     except Exception:
@@ -247,19 +255,6 @@ AUDIO_EXTENSIONS = {
 }
 
 class DSRENativeAudio:
-    """ctypes.CDLL wrapper for libdsre_audio.so.
-
-    libdsre_audio.so は Android APK の native library として同梱してください。
-    Buildozer では android.add_libs_arm64_v8a などで配置する想定です。
-
-    C側PCMレイアウト:
-      - decode output: interleaved float32, samples x channels
-      - encode input : interleaved float32, samples x channels
-
-    Python/DSRE内部レイアウト:
-      - channels-first float32, channels x samples
-    """
-
     def __init__(self, lib_path: Optional[str] = None):
         self.lib_path = lib_path or self._find_library_path()
         self.lib = CDLL(self.lib_path)
@@ -315,7 +310,6 @@ class DSRENativeAudio:
         self._bind_streaming_functions()
 
     def _bind_streaming_functions(self):
-        """Bind optional streaming ABI. If the .so is old, keep legacy mode usable."""
         try:
             self.lib.dsre_decoder_open.argtypes = [
                 c_char_p,
@@ -524,11 +518,6 @@ def get_native_audio() -> DSRENativeAudio:
 
 
 def ffprobe_audio_info(file_path: str) -> Dict[str, Any]:
-    """subprocess/ffprobe は使わないため、詳細情報は取得しない軽量スタブです。
-
-    DSREProcessor のログ互換用にキーだけ返します。実際の decode は
-    libdsre_audio.so 側の dsre_decode_to_f32 が行います。
-    """
     return {
         "sample_rate": 0,
         "channels": 0,
@@ -539,7 +528,6 @@ def ffprobe_audio_info(file_path: str) -> Dict[str, Any]:
 
 
 def load_audio_ffmpeg(file_path: str, target_sr: int) -> Tuple[np.ndarray, int]:
-    """CDLL/native wrapper based loader. No subprocess is used."""
     if target_sr <= 0:
         raise ValueError(f"Invalid target sample rate: {target_sr}")
     return get_native_audio().decode(file_path, target_sr)
@@ -564,7 +552,6 @@ def save_with_metadata(
     fmt: str = "ALAC",
     normalize: bool = True,
 ) -> str:
-    """CDLL/native wrapper based saver. No subprocess is used."""
     if not os.path.exists(in_path):
         raise FileNotFoundError(f"Input file not found: {in_path}")
     if y_out is None or y_out.size == 0:
@@ -1254,15 +1241,6 @@ def enhanced_audio_algorithm(
 
 
 class DSREStreamingDSP:
-    """Stateful streaming DSP for chunked native decode/encode.
-
-    State carried between chunks:
-      - input_tail: previous raw samples used as FFT/band context
-      - dynamic_env: envelope for dynamic enhancement
-
-    The output length always equals the input chunk length.
-    """
-
     def __init__(
         self,
         sr: int,
@@ -1399,7 +1377,6 @@ class DSREProcessor:
         }
 
     def tr(self, key: str) -> str:
-        """Translate processor-side log text without depending on DSREKivyRoot."""
         try:
             return ui_text(load_initial_language(CONFIG_FILE), key)
         except Exception:
@@ -1565,11 +1542,6 @@ class DSREProcessor:
         chunk_seconds: float = 6.0,
         overlap_seconds: float = 0.0,
     ) -> str:
-        """Decode/process/encode using stateful DSP carry-over.
-
-        This preserves sample count and avoids boundary shortening. DSP state is
-        carried by DSREStreamingDSP: input context tail + dynamic envelope.
-        """
         native = get_native_audio()
         if not getattr(native, "streaming_available", False):
             raise RuntimeError("libdsre_audio.so streaming API is not available")
@@ -2572,7 +2544,6 @@ class DSREKivyRoot(BoxLayout):
         self.update_status(self.tr("ready"))
 
     def show_alert(self, title: str, message: str):
-        """Small in-app modal alert. Save/load must continue even if popup fails."""
         try:
             popup = ModalView(size_hint=(0.88, None), height=dp(190), auto_dismiss=True)
             root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
