@@ -2145,33 +2145,30 @@ class DSREKivyRoot(BoxLayout):
         self.show_audio_permission_prompt(on_granted)
 
 
+
     def show_audio_permission_prompt(self, on_granted):
         try:
             popup = ModalView(size_hint=(0.90, 0.78), auto_dismiss=True)
             root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
             root.add_widget(SectionTitle(text=self.tr('permission_audio_title')))
 
-            message_scroll = ScrollView(do_scroll_x=False, size_hint=(1, 1))
-            message_label = MaterialLabel(
+            message_box = TextInput(
                 text=self.tr('permission_audio_message'),
-                size_hint_y=None,
-                height=dp(1),
-                halign="left",
-                valign="top",
+                readonly=True,
+                multiline=True,
+                size_hint=(1, 1),
+                background_normal="",
+                background_active="",
+                background_color=MATERIAL["surface_alt"],
+                foreground_color=MATERIAL["text"],
+                cursor_color=(0, 0, 0, 0),
+                padding=[dp(10), dp(10), dp(10), dp(10)],
+                font_size="13sp",
             )
-
-            def _sync_permission_label_width(_instance, width):
-                message_label.text_size = (max(1, width - dp(8)), None)
-                message_label.texture_update()
-                message_label.height = max(dp(90), message_label.texture_size[1] + dp(16))
-
-            def _sync_permission_label_height(_instance, texture_size):
-                message_label.height = max(dp(90), texture_size[1] + dp(16))
-
-            message_label.bind(width=_sync_permission_label_width)
-            message_label.bind(texture_size=_sync_permission_label_height)
-            message_scroll.add_widget(message_label)
-            root.add_widget(message_scroll)
+            font = get_ui_font()
+            if font:
+                message_box.font_name = font
+            root.add_widget(message_box)
 
             row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
             cancel = MaterialButton(text=self.tr('cancel'), kind="flat")
@@ -2204,7 +2201,6 @@ class DSREKivyRoot(BoxLayout):
             root.add_widget(row)
             popup.add_widget(root)
             popup.open()
-            Clock.schedule_once(lambda _dt: _sync_permission_label_width(message_label, message_scroll.width), 0)
         except Exception as exc:
             write_fflog("Audio permission prompt failed", str(exc), exc)
             request_required_audio_permissions(lambda granted: Clock.schedule_once(lambda _dt: on_granted() if granted else None, 0))
@@ -2603,33 +2599,30 @@ class DSREKivyRoot(BoxLayout):
 
 
 
+
     def show_preprocess_notice(self):
         try:
             popup = ModalView(size_hint=(0.92, 0.86), auto_dismiss=False)
             root = MaterialCard(orientation="vertical", padding=dp(12), spacing=dp(10))
             root.add_widget(SectionTitle(text=self.tr('preprocess_notice_title')))
 
-            message_scroll = ScrollView(do_scroll_x=False, size_hint=(1, 1))
-            message_label = MaterialLabel(
+            message_box = TextInput(
                 text=self.tr('preprocess_notice_message'),
-                size_hint_y=None,
-                height=dp(1),
-                halign="left",
-                valign="top",
+                readonly=True,
+                multiline=True,
+                size_hint=(1, 1),
+                background_normal="",
+                background_active="",
+                background_color=MATERIAL["surface_alt"],
+                foreground_color=MATERIAL["text"],
+                cursor_color=(0, 0, 0, 0),
+                padding=[dp(10), dp(10), dp(10), dp(10)],
+                font_size="13sp",
             )
-
-            def _sync_notice_label_width(_instance, width):
-                message_label.text_size = (max(1, width - dp(8)), None)
-                message_label.texture_update()
-                message_label.height = max(dp(120), message_label.texture_size[1] + dp(16))
-
-            def _sync_notice_label_height(_instance, texture_size):
-                message_label.height = max(dp(120), texture_size[1] + dp(16))
-
-            message_label.bind(width=_sync_notice_label_width)
-            message_label.bind(texture_size=_sync_notice_label_height)
-            message_scroll.add_widget(message_label)
-            root.add_widget(message_scroll)
+            font = get_ui_font()
+            if font:
+                message_box.font_name = font
+            root.add_widget(message_box)
 
             row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
             cancel = MaterialButton(text=self.tr('preprocess_notice_later'), kind="flat")
@@ -2652,7 +2645,6 @@ class DSREKivyRoot(BoxLayout):
             root.add_widget(row)
             popup.add_widget(root)
             popup.open()
-            Clock.schedule_once(lambda _dt: _sync_notice_label_width(message_label, message_scroll.width), 0)
         except Exception as exc:
             write_fflog("Preprocess notice popup failed", str(exc), exc)
             self.safety_notice_accepted = True
