@@ -1398,6 +1398,13 @@ class DSREProcessor:
             "start_time": None,
         }
 
+    def tr(self, key: str) -> str:
+        """Translate processor-side log text without depending on DSREKivyRoot."""
+        try:
+            return ui_text(load_initial_language(CONFIG_FILE), key)
+        except Exception:
+            return str(key)
+
     def get_file_size_mb(self, file_path: str) -> float:
         try:
             return os.path.getsize(file_path) / (1024 * 1024)
