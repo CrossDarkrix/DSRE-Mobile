@@ -24,6 +24,11 @@ DSREは、あらゆるオーディオファイルをバッチ処理で高解像�
 
 * **高速かつ安定:** ディープラーニングモデルに依存しない処理です。
 
+## スクリーンショット
+
+<img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot1.jpg" width="150px" height="300px" alt="android1">
+<img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot2.jpg" width="150px" height="300px" alt="android2">
+
 
 ## インストールと使用 / Installation & Usage
 
