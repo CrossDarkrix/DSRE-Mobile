@@ -154,6 +154,23 @@ EXTRA_UI_TEXT: Dict[str, Dict[str, str]] = {
 for _lang, _texts in EXTRA_UI_TEXT.items():
     UI_TEXT.setdefault(_lang, {}).update(_texts)
 
+FILECHOOSER_UI_TEXT: Dict[str, Dict[str, str]] = {
+    "ja": {
+        "audio_file_select": "音声ファイルを選択",
+        "directory_select": "ディレクトリを選択",
+        "cancel_dialog": "キャンセル",
+        "select_dialog": "選択",
+    },
+    "en": {
+        "audio_file_select": "Select audio file",
+        "directory_select": "Select directory",
+        "cancel_dialog": "Cancel",
+        "select_dialog": "Select",
+    },
+}
+for _lang, _texts in FILECHOOSER_UI_TEXT.items():
+    UI_TEXT.setdefault(_lang, {}).update(_texts)
+
 def normalize_language(value: Any) -> str:
     value = str(value or "ja").strip().lower()
     if value in ("en", "english"):
@@ -1952,7 +1969,8 @@ class FileChooserPopup(ModalView):
         self.auto_dismiss = False
         root = MaterialCard(orientation="vertical")
         root.add_widget(SectionTitle(text=ui_text(load_initial_language(CONFIG_FILE), "directory_select") if choose_dir else ui_text(load_initial_language(CONFIG_FILE), "audio_file_select")))
-        self.chooser = _FileChooserListView(path=os.getenv('EXTERNAL_STORAGE'), dirselect=choose_dir)
+        initial_path = EXTERNAL_STORAGE if os.path.isdir(EXTERNAL_STORAGE) else os.path.expanduser("~")
+        self.chooser = _FileChooserListView(path=initial_path, dirselect=choose_dir)
         font = get_ui_font()
         if font:
             self.font_name = font
@@ -1960,7 +1978,7 @@ class FileChooserPopup(ModalView):
             self.chooser.filters = [lambda folder, filename: os.path.isdir(filename) or os.path.splitext(filename.lower())[1] in AUDIO_EXTENSIONS]
         root.add_widget(self.chooser)
         row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
-        cancel = MaterialButton(text=self.tr("cancel"), kind="flat")
+        cancel = MaterialButton(text=ui_text(load_initial_language(CONFIG_FILE), "cancel_dialog"), kind="flat")
         ok = MaterialButton(text=ui_text(load_initial_language(CONFIG_FILE), "select_dialog"), kind="primary")
         cancel.bind(on_release=lambda *_: self.dismiss())
         ok.bind(on_release=self._select)
