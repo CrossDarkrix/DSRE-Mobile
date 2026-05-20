@@ -9,16 +9,6 @@ DSRE-Mobile is an Android port of **DSRE / Deep Sound Resolution Enhancer**. It 
 
 > DSRE-Mobile is an experimental audio enhancement tool for local, batch-oriented audio processing on Android.
 
-
----
-
-## Screenshots
-
-<img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot1.jpg" align="center" width="150px" height="300px" alt="android1">
-
-<img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot2.jpg" align="center" width="150px" height="300px" alt="android2">
-
-
 ---
 
 ## Features
