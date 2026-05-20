@@ -5,6 +5,13 @@
 
 ---
 
+## Screenshots
+
+<img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot1.jpg" align="center" width="150px" height="300px" alt="android1">|
+<img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot2.jpg" align="center" width="150px" height="300px" alt="android2">
+
+---
+
 # DSRE-Mobile
 
 **Deep Sound Resolution Enhancer for Android**
