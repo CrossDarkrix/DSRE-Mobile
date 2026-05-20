@@ -5,13 +5,9 @@
 
 ---
 
-## Screenshots
-
-<img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot1.jpg" align="center" width="150px" height="300px" alt="android1"><img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot2.jpg" align="center" width="150px" height="300px" alt="android2">
-
----
-
 # DSRE-Mobile
+
+[日本語版 README](README_JA.md) | [English README](README.md)
 
 **Deep Sound Resolution Enhancer for Android**
 
@@ -21,6 +17,13 @@ DSRE-Mobile is an Android port of **DSRE / Deep Sound Resolution Enhancer**. It 
 - Android release page: [DSRE-Mobile Releases](https://github.com/CrossDarkrix/DSRE-Mobile/releases)
 
 > DSRE-Mobile is an experimental audio enhancement tool for local, batch-oriented audio processing on Android.
+
+---
+
+## Screenshots
+
+<img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot1.jpg" align="center" width="150px" height="300px" alt="android1"><img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot2.jpg" align="center" width="150px" height="300px" alt="android2">
+
 
 ---
 
