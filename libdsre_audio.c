@@ -980,7 +980,24 @@ DSRE_EXPORT int dsre_encode_from_f32(
         }
     }
 
-    ret = avformat_write_header(out_fmt, NULL);
+    {
+        AVDictionary* mux_opts = NULL;
+
+        if (codec_id == AV_CODEC_ID_MP3) {
+            /*
+             * MP3 metadata compatibility:
+             * - ID3v2.3 is safer for Japanese metadata on many players.
+             * - ID3v1 is fixed-length and often causes compatibility or
+             *   encoding issues for non-ASCII text, so keep it disabled.
+             */
+            av_dict_set(&mux_opts, "id3v2_version", "3", 0);
+            av_dict_set(&mux_opts, "write_id3v1", "0", 0);
+        }
+
+        ret = avformat_write_header(out_fmt, &mux_opts);
+        av_dict_free(&mux_opts);
+    }
+
     if (ret < 0) {
         dsre_set_av_error("avformat_write_header failed", ret);
         ret = DSRE_ERR_IO;
@@ -1673,7 +1690,18 @@ DSRE_EXPORT int dsre_encoder_open(
         ret = avio_open(&e->out_fmt->pb, output_path, AVIO_FLAG_WRITE);
         if (ret < 0) { dsre_set_av_error("stream encoder avio_open failed", ret); ret = DSRE_ERR_IO; goto fail; }
     }
-    ret = avformat_write_header(e->out_fmt, NULL);
+    {
+        AVDictionary* mux_opts = NULL;
+
+        if (codec_id == AV_CODEC_ID_MP3) {
+            /* MP3 metadata compatibility: prefer ID3v2.3 and avoid ID3v1. */
+            av_dict_set(&mux_opts, "id3v2_version", "3", 0);
+            av_dict_set(&mux_opts, "write_id3v1", "0", 0);
+        }
+
+        ret = avformat_write_header(e->out_fmt, &mux_opts);
+        av_dict_free(&mux_opts);
+    }
     if (ret < 0) { dsre_set_av_error("stream encoder avformat_write_header failed", ret); ret = DSRE_ERR_IO; goto fail; }
 
     /* Best-effort explicit cover packet write for muxers/players that do not pick it up from attached_pic alone. */

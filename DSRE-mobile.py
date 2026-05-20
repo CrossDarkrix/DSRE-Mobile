@@ -2,7 +2,7 @@
 
 DSRE-mobile
 author: CrossDarkRix
-Version: 2.0.7
+Version: 2.1.1
 support language: ja, en
 
 """
@@ -2356,7 +2356,7 @@ class DSREKivyRoot(BoxLayout):
         header = MaterialCard(orientation="vertical", size_hint_y=None, height=dp(70), padding=dp(10))
         header.add_widget(MaterialLabel(text="DSRE Audio Enhancer", font_size="20sp", bold=True, size_hint_y=None, height=dp(30)))
         font_info = get_ui_font() or "_ja_JP.ttf not found"
-        header.add_widget(SmallLabel(text="version: 2.0.7"))
+        header.add_widget(SmallLabel(text="version: 2.1.1"))
         self.add_widget(header)
 
         scroll = ScrollView(do_scroll_x=False)
