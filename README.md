@@ -7,8 +7,7 @@
 
 ## Screenshots
 
-<img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot1.jpg" align="center" width="150px" height="300px" alt="android1">|
-<img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot2.jpg" align="center" width="150px" height="300px" alt="android2">
+<img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot1.jpg" align="center" width="150px" height="300px" alt="android1"><img src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/image/screenshot2.jpg" align="center" width="150px" height="300px" alt="android2">
 
 ---
 
