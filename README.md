@@ -1,3 +1,10 @@
+<div align="center">
+	<a href="https://github.com/CrossDarkrix/DSRE-Mobile">
+	<img width="150px" height="150px" alt="DSRE-Mobile" src="https://raw.githubusercontent.com/CrossDarkrix/DSRE-Mobile/refs/heads/main/icon.png"></a>
+</div>
+
+---
+
 # DSRE-Mobile
 
 **Deep Sound Resolution Enhancer for Android**
