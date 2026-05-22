@@ -1,0 +1,11 @@
+build.local.json
+build_env.local.sh
+android-build/
+native_libs/
+dsre_native/build-*/
+dsre_native/ffmpeg/
+*.so
+*.o
+*.a
+__pycache__/
+*.py[cod]
