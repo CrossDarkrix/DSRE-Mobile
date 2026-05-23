@@ -1,7 +1,7 @@
 """
 
 DSRE-mobile
-author: CrossDarkRix
+author: DSRE-Mobile contributors
 Version: 2.1.1
 support language: ja, en
 
