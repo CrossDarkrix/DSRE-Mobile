@@ -55,7 +55,7 @@ def resolve_ndk(v:Optional[str],c:Dict[str,object]) -> Path:
     p=Path(os.path.expanduser(str(raw))).resolve()
     if not p.is_dir():
         fail(f'Android NDK path does not exist: {p}')
-    if not (p/'toolchains'/'llvm'/'prebuilt').is_dir():
+    if not (p / 'toolchains' / 'llvm' / 'prebuilt').is_dir():
         fail(f'NDK LLVM prebuilt directory not found under: {p}')
     return p
 
@@ -81,22 +81,23 @@ def lame_prefix(a:argparse.Namespace,c:Dict[str,object],abi:str) -> Path:
     if getattr(a,'lame_prefix',None):
         return Path(os.path.expanduser(a.lame_prefix)).resolve()
     root = getattr(a,'lame_root',None) or c.get('lame_root')
-    return (Path(os.path.expanduser(str(root))).resolve()/abi) if root else (ROOT/'lame-3.100'/'android-build'/abi).resolve()
+    return (Path(os.path.expanduser(str(root))).resolve() / abi) if root else (ROOT / 'lame-3.100' / 'android-build' / abi).resolve()
 
 def ffmpeg_prefix(a:argparse.Namespace, c:Dict[str,object], abi:str)  ->  Path:
-    return Path(os.path.expanduser(a.ffmpeg_prefix)).resolve() if getattr(a,'ffmpeg_prefix',None) else (ROOT/'android-build'/abi).resolve()
+    return Path(os.path.expanduser(a.ffmpeg_prefix)).resolve() if getattr(a,'ffmpeg_prefix',None) else (ROOT / 'android-build' / abi).resolve()
 
 def sync_ffmpeg(prefix:Path,abi:str,dry:bool=False) -> None:
     if not (prefix / 'include').is_dir() or not (prefix / 'lib').is_dir():
         fail(f'FFmpeg output is incomplete for {abi}: {prefix} (expected include/ and lib/)')
-    dest=ROOT/'dsre_native' / 'ffmpeg' / abi
+    dest=ROOT / 'dsre_native' / 'ffmpeg' / abi
     say(f'Sync FFmpeg: {prefix} -> {dest}')
     if dry:
         return
     dest.mkdir(parents=True,exist_ok=True)
     for n in ('include','lib'):
-        if (dest/n).exists(): shutil.rmtree(dest/n)
-        shutil.copytree(prefix/n,dest/n)
+        if (dest / n).exists():
+            shutil.rmtree(dest / n)
+        shutil.copytree(prefix / n,dest / n)
 
 def cmd_configure(a):
     c = load_config()
@@ -119,8 +120,8 @@ def cmd_ffmpeg(a):
     if not src_raw:
         fail('FFmpeg source directory is not set. Use --ffmpeg-source or configure first.')
     src = Path(os.path.expanduser(str(src_raw))).resolve()
-    if not (src/'configure').is_file():
-        fail(f'FFmpeg configure script not found: {src/"configure"}')
+    if not (src / 'configure').is_file():
+        fail(f'FFmpeg configure script not found: {src / "configure"}')
     for abi in parse_abis(a.abis or a.abi):
         e = env_for(c,a,abi)
         lp=lame_prefix(a,c,abi)
@@ -129,7 +130,7 @@ def cmd_ffmpeg(a):
             fail(f'LAME_PREFIX for {abi} does not exist: {lp}')
         e['LAME_PREFIX']=str(lp)
         e['FFMPEG_PREFIX']=str(fp)
-        run(['sh',str(ROOT/FFMPEG_SCRIPT[abi])], cwd=src,env=e,dry_run=a.dry_run)
+        run(['sh',str(ROOT / FFMPEG_SCRIPT[abi])], cwd=src,env=e,dry_run=a.dry_run)
         if a.sync_native:
             sync_ffmpeg(fp,abi,a.dry_run)
 
@@ -143,7 +144,7 @@ def cmd_native(a):
     for abi in parse_abis(a.abis or a.abi):
         e = env_for(c,a,abi)
         e['ABI']=abi
-        run(['sh', str(ROOT/'build_libdsre_audio_c.sh')], cwd=ROOT, env=e, dry_run=a.dry_run)
+        run(['sh', str(ROOT / 'build_libdsre_audio_c.sh')], cwd=ROOT, env=e, dry_run=a.dry_run)
 
 def cmd_all(a):
     a.abis = ','.join(parse_abis(a.abis))
