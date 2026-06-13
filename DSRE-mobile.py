@@ -50,7 +50,7 @@ CONFIG_FILE = os.path.join(DSRE_DOCUMENT_DIR, "dsre_kivy_config.json")
 FFLOG_FILE = os.path.join(DSRE_DOCUMENT_DIR, "fflog.txt")
 
 DEFAULT_AUDIO_PRESETS: Dict[str, Dict[str, Any]] = {
-    "基準 / Reference: 15/0.47": {"m": "15", "decay": "0.47", "target_sr": "48000", "format": "ALAC", "stereo_width": "0.98", "dynamic": "1.11", "dsp_context": "0.04"},
+    "基準 / Reference: 15/0.47": {"m": "8", "decay": "0.67", "target_sr": "96000", "format": "ALAC", "stereo_width": "0.67", "dynamic": "0.55", "dsp_context": "0.04"},
     "狭め明瞭 / Clear Narrow: 15/0.48": {"m": "15", "decay": "0.48", "target_sr": "48000", "format": "ALAC", "stereo_width": "0.78", "dynamic": "1.03", "dsp_context": "0.02"},
     "自然寄り / Natural: 14/0.45": {"m": "14", "decay": "0.45", "target_sr": "48000", "format": "ALAC", "stereo_width": "0.98", "dynamic": "1.10", "dsp_context": "0.04"},
 }
