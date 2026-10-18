@@ -15,6 +15,7 @@ DSRE-Mobile は、**DSRE / Deep Sound Resolution Enhancer** のAndroid移植版�
 
 - Original concept: [DSRE / Digital Sound Resolution Enhancer English](https://github.com/Urabewe/DSRE---Digital-Sound-Resolution-Enhancer-English)
 - Android release page: [DSRE-Mobile Releases](https://github.com/CrossDarkrix/DSRE-Mobile/releases)
+- Windows版はこちら: [DSRE-Audio-Enhancer](https://github.com/CrossDarkrix/DSRE-Audio-Enhancer)
 
 > DSRE-Mobile は、Android上でローカルかつバッチ処理向けに音声処理を行う実験的なオーディオエンハンスメントツールです。
 
